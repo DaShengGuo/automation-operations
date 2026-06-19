@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抖音评论运营 Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="status-bar">
+                <span id="state-dot" class="dot red"></span>
+                <span id="state-text">已停止</span>
+                <span class="divider">|</span>
+                <span id="run-time">已运行: --</span>
+            </div>
+            <div class="controls">
+                <button id="btn-pause" onclick="pauseBot()" disabled>⏸ 暂停</button>
+                <button id="btn-resume" onclick="resumeBot()" disabled>▶ 恢复</button>
+                <button id="btn-stop" onclick="stopBot()" disabled>⏹ 停止</button>
+            </div>
+        </header>
+        <section class="stats-row">
+            <div class="stat-card"><div class="stat-number" id="stat-comments">0</div><div class="stat-label">📊 今日评论</div></div>
+            <div class="stat-card"><div class="stat-number" id="stat-likes">0</div><div class="stat-label">👍 获赞</div></div>
+            <div class="stat-card"><div class="stat-number" id="stat-replies">0</div><div class="stat-label">💬 回复互动</div></div>
+            <div class="stat-card"><div class="stat-number" id="stat-dms">0</div><div class="stat-label">✉️ 私信</div></div>
+            <div class="stat-card"><div class="stat-number" id="stat-active">0</div><div class="stat-label">🔄 活跃任务</div></div>
+        </section>
+        <section class="tasks-section">
+            <h2>活跃任务</h2>
+            <div id="tasks-container"><div class="empty-state">暂无活跃任务</div></div>
+        </section>
+        <section class="logs-section">
+            <h2>操作日志</h2>
+            <div id="logs-container"><div class="empty-state">等待系统启动...</div></div>
+        </section>
+    </div>
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

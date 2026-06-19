@@ -1,0 +1,34 @@
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.container{max-width:960px;margin:0 auto;padding:20px}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:#1e293b;border-radius:12px;margin-bottom:20px}
+.status-bar{display:flex;align-items:center;gap:10px;font-size:16px}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+.dot.green{background:#22c55e;box-shadow:0 0 8px #22c55e}
+.dot.yellow{background:#eab308;box-shadow:0 0 8px #eab308}
+.dot.red{background:#ef4444}
+.controls{display:flex;gap:8px}
+.controls button{padding:8px 16px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;transition:all 0.2s}
+.controls button:hover:not(:disabled){opacity:0.85}
+.controls button:disabled{opacity:0.4;cursor:not-allowed}
+#btn-pause{background:#eab308;color:#1e293b}
+#btn-resume{background:#22c55e;color:#1e293b}
+#btn-stop{background:#ef4444;color:white}
+.stats-row{display:flex;gap:12px;margin-bottom:20px}
+.stat-card{flex:1;background:#1e293b;border-radius:12px;padding:16px;text-align:center}
+.stat-number{font-size:28px;font-weight:700;color:#38bdf8}
+.stat-label{font-size:13px;color:#94a3b8;margin-top:4px}
+.tasks-section,.logs-section{background:#1e293b;border-radius:12px;padding:16px;margin-bottom:16px}
+.tasks-section h2,.logs-section h2{font-size:15px;color:#94a3b8;margin-bottom:12px}
+.task-card{display:flex;align-items:center;gap:12px;padding:10px 12px;background:#0f172a;border-radius:8px;margin-bottom:8px}
+.task-state{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.task-state.WAITING_LIKE{background:#eab308}
+.task-state.WAITING_REPLY{background:#22c55e}
+.task-state.PENDING,.task-state.POSTING{background:#3b82f6}
+.task-state.FAILED{background:#ef4444}
+.task-info{flex:1;font-size:14px}
+.task-info .meta{font-size:12px;color:#64748b;margin-top:2px}
+.task-timer{font-size:13px;color:#38bdf8;white-space:nowrap}
+.log-entry{padding:6px 0;border-bottom:1px solid #1e293b;font-size:13px;color:#94a3b8}
+.log-entry .time{color:#64748b;margin-right:8px}
+.empty-state{text-align:center;padding:24px;color:#475569}
