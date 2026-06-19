@@ -93,6 +93,7 @@ class CommentBot:
     def _main_loop(self):
         video_index = 0
         video_count_since_rest = 0
+        last_badge_check = time.time()
 
         while self.interrupt.state.name != "STOPPED":
             if self.interrupt.is_paused:
@@ -104,12 +105,17 @@ class CommentBot:
                 continue
 
             try:
-                # 1. 检查定时器到期任务
+                # 1. 定期检查消息Tab红点（每20秒），有回复立即处理
+                if time.time() - last_badge_check > 20:
+                    last_badge_check = time.time()
+                    self._check_message_badge_and_handle()
+
+                # 2. 检查定时器到期任务
                 expired = self.scheduler.check_timers()
                 for vid in expired:
                     self._handle_expired_timer(vid)
 
-                # 2. 获取就绪任务
+                # 3. 获取就绪任务
                 ready_task = self.scheduler.get_ready_task()
                 if ready_task:
                     self._execute_task(ready_task)
@@ -117,7 +123,7 @@ class CommentBot:
                     self._push_dashboard_update()
                     continue
 
-                # 3. 刷视频
+                # 4. 刷视频
                 if self.test_mode:
                     self._simulate_video_scan(video_index)
                 else:
@@ -148,12 +154,12 @@ class CommentBot:
 
     def _scan_video(self):
         """
-        真实模式：抖音推荐Tab视频自动连播。
-        策略：立即截图 → OCR判断 → 目标则暂停连播评论 → 非目标则自然等自动跳转。
-        不手动滑动！避免与自动连播冲突导致跳2个视频。
+        真实模式：手动滑动刷视频（效率优先）。
+        抖音推荐Tab会自动连播，但我们主动手动滑可以控制节奏、更快跳过不相关内容。
+        策略：立即截图 → OCR判断 → 非目标直接滑走 → 目标则打开评论区。
         """
-        # 立即截图（不等视频播完，因为会自动跳下一个）
-        time.sleep(random.uniform(0.5, 1.5))  # 等视频渲染稳定
+        # 等视频渲染稳定后截图
+        time.sleep(random.uniform(0.8, 1.5))
         ss = self.ctrl.base.screenshot(f"video_scan_{int(time.time())}")
 
         # 检查验证码
@@ -166,15 +172,14 @@ class CommentBot:
         result = self.filter.check_content(ss)
 
         if result != FilterResult.PASS:
-            # 非目标视频 → 等待自动跳到下一个（抖音推荐Tab会自动连播）
-            wait = random.uniform(cfg.VIDEO_WATCH_MIN, cfg.VIDEO_WATCH_MAX)
-            time.sleep(wait)
+            # 非目标 → 手动滑走（比等自动连播快）
+            time.sleep(random.uniform(0.5, 1.0))
+            self.ctrl.nav.swipe_next_video()
             return
 
-        # 目标视频 → 打开评论区（打开评论区会暂停自动连播）
+        # 目标视频 → 打开评论区（暂停连播）
         if not self.ctrl.nav.open_comments():
-            # 打不开评论区，等自动跳转
-            time.sleep(random.uniform(cfg.VIDEO_WATCH_MIN, cfg.VIDEO_WATCH_MAX))
+            self.ctrl.nav.swipe_next_video()
             return
 
         # 评论区已打开，分析时效
@@ -192,8 +197,9 @@ class CommentBot:
             if fres == FilterResult.PASS:
                 self._create_comment_task(ss)
 
-        # 关闭评论区，视频继续自动连播
+        # 关闭评论区，继续手动滑下一个
         self.ctrl.nav.close_comments()
+        self.ctrl.nav.swipe_next_video()
 
     def _simulate_video_scan(self, index: int):
         logger.info(f"[测试] 刷到视频 #{index}")
@@ -349,6 +355,86 @@ class CommentBot:
         if fsm:
             self._execute_task(fsm)
 
+    def _check_message_badge_and_handle(self):
+        """
+        检查底部消息Tab红点 → 有则进入消息流处理回复。
+        这是主要的回复检测方式（比逐条评论区检查更可靠）。
+        """
+        if self.test_mode:
+            return
+
+        if not self.ctrl.nav.check_message_badge():
+            return  # 无红点，跳过
+
+        logger.info("[消息] 检测到消息Tab红点，进入互动消息处理...")
+
+        # 保存当前状态，处理完消息后恢复刷视频
+        try:
+            # 1. 打开消息Tab
+            self.ctrl.nav.open_messages_tab()
+
+            # 2. 打开互动消息
+            if not self.ctrl.nav.open_interaction_messages():
+                logger.info("[消息] 未找到互动消息入口，返回首页")
+                self.ctrl.nav.close_messages_to_home()
+                return
+
+            # 3. 打开第一条回复详情（最新回复在最上面）
+            if not self.ctrl.nav.open_first_reply_detail():
+                logger.info("[消息] 无法打开回复详情")
+                self.ctrl.nav.close_messages_to_home()
+                return
+
+            # 4. OCR 识别回复内容
+            ss = self.ctrl.base.screenshot(f"msg_reply_{int(time.time())}")
+            texts = ocr_full_screen(ss)
+            user_comment = " ".join(texts) if texts else "怎么治的"
+            logger.info(f"[消息] 回复内容OCR: {user_comment[:80]}")
+
+            # 5. 根据回复内容生成回复
+            reply_text = self.materials.pick_reply(user_comment)
+
+            # 6. 在详情页直接回复
+            self.ctrl.nav.reply_in_message_detail(reply_text)
+            logger.info(f"[消息] 已回复: {reply_text}")
+
+            # 7. 更新统计数据
+            update_stats(today_replies=1)
+
+            # 8. 等待1分钟后关注+私信
+            time.sleep(cfg.DM_DELAY_SEC)
+
+            # 9. 点击用户头像 → 关注 → 私信
+            self.ctrl.user.click_user_avatar()
+            time.sleep(1.5)
+            if self.ctrl.user.follow_user():
+                logger.info("[消息] 已关注用户")
+            time.sleep(1.0)
+            self.ctrl.user.send_dm(self.materials.pick_dm())
+            update_stats(today_dms=1)
+            logger.info("[消息] 已发送私信")
+
+            # 10. 返回首页继续刷视频
+            self.ctrl.nav.close_messages_to_home()
+
+            # 将对应的 WAITING_REPLY 任务标记为已处理
+            for vid, fsm in list(self.scheduler.active_tasks.items()):
+                if fsm.state == FSMState.WAITING_REPLY:
+                    fsm.transition(FSMState.REPLYING)
+                    fsm.transition(FSMState.FOLLOWING)
+                    fsm.transition(FSMState.DM_SEND)
+                    fsm.mark_completed()
+                    self.db.save(fsm)
+                    break  # 一次处理一条
+
+        except Exception as e:
+            logger.error(f"[消息处理异常] {e}", exc_info=True)
+            # 尝试恢复到首页
+            try:
+                self.ctrl.nav.close_messages_to_home()
+            except Exception:
+                pass
+
     def _check_likes(self) -> bool:
         if self.test_mode:
             return random.random() > 0.4
@@ -356,10 +442,13 @@ class CommentBot:
         return "点赞" in xml
 
     def _check_replies(self) -> bool:
+        """
+        检查是否有回复。优先使用消息Tab红点检测（更可靠）。
+        测试模式用随机；真实模式检查消息Tab红点。
+        """
         if self.test_mode:
             return random.random() > 0.5
-        xml = self.ctrl.base.dump_hierarchy()
-        return "回复" in xml
+        return self.ctrl.nav.check_message_badge()
 
     @staticmethod
     def _is_operating_hours() -> bool:

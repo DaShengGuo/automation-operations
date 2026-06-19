@@ -86,19 +86,22 @@ class BaseActions:
 
 
 class NavigateActions:
-    """导航操作（刷推荐Tab、搜索、进视频）"""
+    """导航操作（刷推荐Tab、搜索、进视频、消息通知）"""
 
     def __init__(self, base: BaseActions):
         self.b = base
 
     def open_recommend_tab(self):
+        """点击底部「首页」回到推荐Tab"""
         self.b._tap_ratio(0.13, 0.95)
         time.sleep(1.5)
 
     def swipe_next_video(self):
+        """手动下滑刷下一个视频"""
         self.b._swipe_up(0.65)
 
     def open_comments(self) -> bool:
+        """打开当前视频评论区"""
         found = self.b._find_and_tap(desc="评论", timeout=3.0)
         if not found:
             self.b._tap_ratio(0.85, 0.75)
@@ -106,6 +109,7 @@ class NavigateActions:
         return True
 
     def close_comments(self):
+        """关闭评论区"""
         self.b._press_back()
         time.sleep(0.8)
 
@@ -131,6 +135,74 @@ class NavigateActions:
         self.b._tap_ratio(cx, cy)
         time.sleep(random.uniform(1.5, 3.0))
         return True
+
+    # ── 消息通知 + 互动消息导航 ──
+
+    def check_message_badge(self) -> bool:
+        """
+        检查底部「消息」Tab是否有红色未读标记。
+        通过截图+OCR或UI层级检测。
+        """
+        xml = self.b.dump_hierarchy()
+        # 抖音消息Tab的红点通常有 content-desc 包含数字或"未读"
+        import re
+        # 查找包含未读数字的节点
+        if re.search(r'未读|消息.*\d+', xml):
+            return True
+        # 备用：检查 content-desc 中的数字红点
+        if re.search(r'content-desc="\d+"', xml):
+            return True
+        return False
+
+    def open_messages_tab(self) -> bool:
+        """点击底部「消息」Tab（第4个，ratio≈0.63, 0.95）"""
+        self.b._tap_ratio(0.63, 0.95)
+        time.sleep(2.0)
+        return True
+
+    def open_interaction_messages(self) -> bool:
+        """在消息页面中点击「互动消息」入口"""
+        found = self.b._find_and_tap(text="互动消息", timeout=3.0) or \
+                self.b._find_and_tap(desc="互动消息", timeout=3.0)
+        if not found:
+            # 有些版本叫"互动"
+            found = self.b._find_and_tap(text="互动", timeout=2.0)
+        time.sleep(1.5)
+        return found
+
+    def open_first_reply_detail(self) -> bool:
+        """
+        在互动消息列表中，点击第一条回复消息进入详情页。
+        互动消息列表中每条显示「XXX回复了你的评论」。
+        """
+        # 点击列表中的第一条消息（通常在屏幕上部1/3处）
+        self.b._tap_ratio(0.5, 0.28)
+        time.sleep(2.0)
+        return True
+
+    def reply_in_message_detail(self, reply_text: str) -> bool:
+        """
+        在评论详情页（从互动消息进入）直接回复。
+        详情页底部有回复输入框。
+        """
+        # 点击底部回复输入框
+        self.b._tap_ratio(0.5, 0.92)
+        time.sleep(1.0)
+        self.b.d.send_keys(reply_text)
+        self.b._rand_delay(0.3, 0.8)
+        # 点击发送
+        return self.b._find_and_tap(text="发送", timeout=2.0) or \
+               self.b._find_and_tap(desc="发送", timeout=2.0) or \
+               self.b.d.press("enter")
+
+    def close_message_detail(self):
+        """从评论详情页返回互动消息列表"""
+        self.b._press_back()
+        time.sleep(0.8)
+
+    def close_messages_to_home(self):
+        """从消息页返回首页推荐Tab"""
+        self.open_recommend_tab()
 
 
 class CommentActions:
