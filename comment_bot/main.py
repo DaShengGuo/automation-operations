@@ -147,40 +147,53 @@ class CommentBot:
         self._shutdown()
 
     def _scan_video(self):
-        """真实模式：观看视频 → OCR 标题 → 打开评论区 → 时效分析"""
-        watch_time = random.uniform(cfg.VIDEO_WATCH_MIN, cfg.VIDEO_WATCH_MAX)
-        time.sleep(watch_time)
+        """
+        真实模式：抖音推荐Tab视频自动连播。
+        策略：立即截图 → OCR判断 → 目标则暂停连播评论 → 非目标则自然等自动跳转。
+        不手动滑动！避免与自动连播冲突导致跳2个视频。
+        """
+        # 立即截图（不等视频播完，因为会自动跳下一个）
+        time.sleep(random.uniform(0.5, 1.5))  # 等视频渲染稳定
+        ss = self.ctrl.base.screenshot(f"video_scan_{int(time.time())}")
 
+        # 检查验证码
         if self.ctrl.check_captcha():
             logger.warning("[验证码] 检测到验证码，暂停等待手动处理")
             self.interrupt.pause()
             return
 
-        ss = self.ctrl.base.screenshot(f"video_scan_{int(time.time())}")
+        # OCR 判断视频内容
         result = self.filter.check_content(ss)
 
         if result != FilterResult.PASS:
-            self.ctrl.nav.swipe_next_video()
+            # 非目标视频 → 等待自动跳到下一个（抖音推荐Tab会自动连播）
+            wait = random.uniform(cfg.VIDEO_WATCH_MIN, cfg.VIDEO_WATCH_MAX)
+            time.sleep(wait)
             return
 
-        if self.ctrl.nav.open_comments():
-            time.sleep(1.5)
-            comment_ss = self.ctrl.base.screenshot(
-                f"comments_{int(time.time())}"
-            )
-            time_texts = crop_and_ocr(comment_ss, (0.65, 0.25, 0.92, 0.85))
-            times = [parse_comment_time(t) for t in time_texts]
-            times = [t for t in times if t < 99999]
+        # 目标视频 → 打开评论区（打开评论区会暂停自动连播）
+        if not self.ctrl.nav.open_comments():
+            # 打不开评论区，等自动跳转
+            time.sleep(random.uniform(cfg.VIDEO_WATCH_MIN, cfg.VIDEO_WATCH_MAX))
+            return
 
-            if times:
-                score = self.filter.calc_freshness_score(times)
-                fres = self.filter.should_comment(score)
-                if fres == FilterResult.PASS:
-                    self._create_comment_task(ss)
+        # 评论区已打开，分析时效
+        time.sleep(1.5)
+        comment_ss = self.ctrl.base.screenshot(
+            f"comments_{int(time.time())}"
+        )
+        time_texts = crop_and_ocr(comment_ss, (0.65, 0.25, 0.92, 0.85))
+        times = [parse_comment_time(t) for t in time_texts]
+        times = [t for t in times if t < 99999]
 
-            self.ctrl.nav.close_comments()
+        if times:
+            score = self.filter.calc_freshness_score(times)
+            fres = self.filter.should_comment(score)
+            if fres == FilterResult.PASS:
+                self._create_comment_task(ss)
 
-        self.ctrl.nav.swipe_next_video()
+        # 关闭评论区，视频继续自动连播
+        self.ctrl.nav.close_comments()
 
     def _simulate_video_scan(self, index: int):
         logger.info(f"[测试] 刷到视频 #{index}")
