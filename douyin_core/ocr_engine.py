@@ -49,10 +49,8 @@ def crop_and_ocr(image_path: str,
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     scaled = cv2.resize(binary, None, fx=2, fy=2,
                         interpolation=cv2.INTER_CUBIC)
-    tmp_path = image_path.replace(".png", "_ocr_tmp.png")
-    cv2.imwrite(tmp_path, scaled)
     ocr = _get_ocr()
-    results = ocr.ocr(tmp_path, cls=True)
+    results = ocr.ocr(scaled, cls=True)
     texts = []
     if results and results[0]:
         for line in results[0]:
