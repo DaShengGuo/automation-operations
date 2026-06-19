@@ -1,6 +1,11 @@
 """
 douyin_core/adb_controller.py
 抖音自动化框架 — ADB/uiautomator2 统一操作层
+
+坐标来源：用户提供截图 + 智谱视觉分析
+  底部 5 个 Tab（从左到右）：首页(0.10) 朋友(0.30) +(0.50) 消息(0.70) 我(0.90)
+  评论区按钮：右侧 (0.93, 0.71)
+  互动消息入口：消息页中上部 (0.20, 0.28)
 """
 from __future__ import annotations
 
@@ -12,6 +17,14 @@ from typing import Optional
 import uiautomator2 as u2
 
 from douyin_core import config as cfg
+
+# ── 底部导航 Tab 横坐标（5等分，基于1080px宽度实测） ──
+TAB_HOME = 0.10       # 首页
+TAB_FRIENDS = 0.30    # 朋友
+TAB_CREATE = 0.50     # + 号
+TAB_MESSAGES = 0.70   # 消息
+TAB_ME = 0.90         # 我
+TAB_Y = 0.96          # 底部 Tab 纵坐标
 
 
 class BaseActions:
@@ -93,7 +106,7 @@ class NavigateActions:
 
     def open_recommend_tab(self):
         """点击底部「首页」回到推荐Tab"""
-        self.b._tap_ratio(0.13, 0.95)
+        self.b._tap_ratio(TAB_HOME, TAB_Y)
         time.sleep(1.5)
 
     def swipe_next_video(self):
@@ -101,10 +114,10 @@ class NavigateActions:
         self.b._swipe_up(0.65)
 
     def open_comments(self) -> bool:
-        """打开当前视频评论区"""
+        """打开当前视频评论区（右侧评论按钮）"""
         found = self.b._find_and_tap(desc="评论", timeout=3.0)
         if not found:
-            self.b._tap_ratio(0.85, 0.75)
+            self.b._tap_ratio(0.93, 0.71)  # 右侧评论区按钮（截图实测）
         time.sleep(1.5)
         return True
 
@@ -155,8 +168,8 @@ class NavigateActions:
         return False
 
     def open_messages_tab(self) -> bool:
-        """点击底部「消息」Tab（第4个，ratio≈0.63, 0.95）"""
-        self.b._tap_ratio(0.63, 0.95)
+        """点击底部「消息」Tab（第4个Tab，实测 0.70）"""
+        self.b._tap_ratio(TAB_MESSAGES, TAB_Y)
         time.sleep(2.0)
         return True
 
@@ -165,18 +178,21 @@ class NavigateActions:
         found = self.b._find_and_tap(text="互动消息", timeout=3.0) or \
                 self.b._find_and_tap(desc="互动消息", timeout=3.0)
         if not found:
-            # 有些版本叫"互动"
             found = self.b._find_and_tap(text="互动", timeout=2.0)
+        if not found:
+            # 坐标兜底：消息页中上部，互动消息入口（截图实测≈0.20, 0.28）
+            self.b._tap_ratio(0.20, 0.28)
+            found = True
         time.sleep(1.5)
         return found
 
     def open_first_reply_detail(self) -> bool:
         """
-        在互动消息列表中，点击第一条回复消息进入详情页。
-        互动消息列表中每条显示「XXX回复了你的评论」。
+        在互动消息列表中，点击第一条回复进入详情页。
+        每条显示「XXX回复了你的评论」，第一条在列表最上方。
         """
-        # 点击列表中的第一条消息（通常在屏幕上部1/3处）
-        self.b._tap_ratio(0.5, 0.28)
+        # 互动消息列表第一项（实测约屏幕上部 1/3 偏下）
+        self.b._tap_ratio(0.50, 0.35)
         time.sleep(2.0)
         return True
 
