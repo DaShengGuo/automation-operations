@@ -1,10 +1,12 @@
 """
 comment_bot/materials.py
 Excel 素材管理器 — 文案/图片/私信/回复 的读取和随机选取
+支持模板随机变体生成，避免内容重复
 """
 from __future__ import annotations
 
 import random
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -12,6 +14,76 @@ from typing import Optional
 import openpyxl
 
 from douyin_core import config as cfg
+
+
+# ── 模板变体引擎 ──
+
+# 同义词替换表：用于随机生成模板变体
+SYNONYM_MAP = {
+    "吃药": ["吃药", "口服药", "用药", "服药"],
+    "照光": ["照光", "光照", "光疗", "光治疗"],
+    "光照": ["光照", "照光", "光疗", "光治疗"],
+    "弄好": ["弄好", "治好", "恢复", "康复"],
+    "恢复": ["恢复", "康复", "好转", "变好"],
+    "坚持": ["坚持", "持续", "一直", "不懈"],
+    "真的": ["真的", "确实", "真心", "实在"],
+    "看到": ["看到", "看见", "收到", "注意到"],
+    "评论": ["评论", "留言", "消息", "询问"],
+    "你好": ["你好", "您好", "嗨", "嘿"],
+    "方法": ["方法", "办法", "方式", "方案"],
+}
+
+
+class TemplateVariation:
+    """模板变体生成器：从模板池随机选取并可选同义词替换"""
+
+    @staticmethod
+    def pick_random_from_pool(templates: list[dict], trigger: str = None) -> str:
+        """
+        从模板池中随机选取一条。
+        如果指定 trigger，优先匹配 trigger 相关模板；
+        若多个匹配，随机选一个。
+        """
+        if not templates:
+            return ""
+
+        if trigger:
+            # 收集匹配 trigger 的模板
+            matched = [
+                t for t in templates
+                if str(t.get("trigger", "")).strip() == trigger
+            ]
+            if matched:
+                chosen = random.choice(matched)
+                return str(chosen.get("content", ""))
+
+        # 无 trigger 匹配 → 从全部模板随机选
+        chosen = random.choice(templates)
+        return str(chosen.get("content", ""))
+
+    @staticmethod
+    def apply_synonym_variation(text: str, intensity: float = 0.3) -> str:
+        """
+        对文本进行轻度同义词替换，增加多样性。
+        intensity: 0-1，替换概率（0.3 表示约 30% 可替换词会被替换）
+        """
+        words = list(SYNONYM_MAP.keys())
+        random.shuffle(words)
+        result = text
+        for word in words:
+            if random.random() < intensity:
+                replacement = random.choice(SYNONYM_MAP[word])
+                if replacement != word:
+                    result = result.replace(word, replacement)
+        return result
+
+    @staticmethod
+    def add_random_emoji(text: str, probability: float = 0.3) -> str:
+        """随机追加表情符号"""
+        if random.random() < probability:
+            emojis = ["😊", "🙏", "❤️", "✨", "💪", "🌹", "😄", "👍"]
+            text = text + random.choice(emojis)
+        return text
 
 
 class MaterialManager:
@@ -136,26 +208,79 @@ class MaterialManager:
         return chosen
 
     def pick_dm(self, trigger: str = "默认") -> str:
+        """
+        从私信模板池随机选取一条。
+        优先匹配 trigger，多个匹配时随机选一个（避免重复）。
+        可选应用轻度同义词替换增加多样性。
+        """
         templates = self.get_dm_templates()
-        for t in templates:
-            if str(t.get("trigger", "")).strip() == trigger:
-                return str(t.get("content", ""))
-        if templates:
-            return str(templates[0].get("content", ""))
-        return "看到你评论问我，我是吃药加照光弄好的"
+        if not templates:
+            return "看你评论问我，我是吃药加光照弄好的"
+
+        # 收集所有匹配的模板
+        if trigger != "默认":
+            matched = [
+                t for t in templates
+                if str(t.get("trigger", "")).strip() == trigger
+            ]
+        else:
+            matched = templates
+
+        if not matched:
+            matched = templates
+
+        # 随机选取
+        chosen = random.choice(matched)
+        text = str(chosen.get("content", ""))
+
+        # 30% 概率应用轻度同义词替换
+        if random.random() < 0.3:
+            text = TemplateVariation.apply_synonym_variation(text, intensity=0.2)
+
+        return text
 
     def pick_reply(self, user_comment: str) -> str:
+        """
+        根据用户评论内容匹配回复模板，随机选取一条。
+        多个匹配时随机选（避免重复），无匹配返回默认表情包。
+        """
         templates = self.get_reply_templates()
+        if not templates:
+            return "😊👍"
+
+        # 收集所有关键词匹配的模板
+        matched = []
         for t in templates:
             keywords = str(t.get("trigger_keywords", "")).split(",")
             if "*" in keywords:
-                continue
+                continue  # 通配符作为兜底
             for kw in keywords:
                 if kw.strip() in user_comment:
-                    return str(t.get("content", ""))
-        for t in templates:
-            if "*" in str(t.get("trigger_keywords", "")):
-                return str(t.get("content", ""))
+                    matched.append(t)
+                    break  # 一个模板只加一次
+
+        # 有匹配 → 随机选一条
+        if matched:
+            chosen = random.choice(matched)
+            text = str(chosen.get("content", ""))
+            # 对文本类型应用轻度变体
+            if str(chosen.get("reply_type", "")).strip() == "text":
+                if random.random() < 0.25:
+                    text = TemplateVariation.apply_synonym_variation(
+                        text, intensity=0.2
+                    )
+                text = TemplateVariation.add_random_emoji(text, probability=0.3)
+            return text
+
+        # 无匹配 → 随机选通配符兜底
+        fallback = [
+            t for t in templates
+            if "*" in str(t.get("trigger_keywords", ""))
+        ]
+        if fallback:
+            chosen = random.choice(fallback)
+            return str(chosen.get("content", ""))
+
         return "😊👍"
 
     def reload(self):
