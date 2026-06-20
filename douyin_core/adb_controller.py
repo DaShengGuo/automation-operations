@@ -418,24 +418,45 @@ class CommentActions:
         self.b = base
         self._keyboard_open = False
 
-    def _tap_input_field(self):
-        """点击评论输入框（键盘未弹出时）"""
-        self.b._smart_find_and_tap(
-            template=None,
-            desc=None,
-            coord=(self.INPUT_X_CLOSED, self.INPUT_Y_CLOSED),
-        )
-        time.sleep(1.5)  # 等待键盘弹出
-        self._keyboard_open = True
-
     def reset_keyboard_state(self):
         """外部调用：关闭评论区后重置键盘状态"""
         self._keyboard_open = False
 
+    def _find_and_focus_input(self) -> bool:
+        """
+        找到评论输入框并聚焦。按优先级：
+        1. EditText 组件
+        2. focused=True 的元素
+        3. 坐标兜底
+        """
+        # 1. 找 EditText
+        try:
+            el = self.b.d(className="android.widget.EditText")
+            if el.exists and el.info.get("visible", False):
+                el.click()
+                time.sleep(1.5)
+                return True
+        except Exception:
+            pass
+        # 2. 找已聚焦元素
+        try:
+            el = self.b.d(focused=True)
+            if el.exists:
+                el.click()
+                time.sleep(1.5)
+                return True
+        except Exception:
+            pass
+        # 3. 坐标兜底
+        self.b._tap_ratio(0.30, 0.97)
+        time.sleep(1.5)
+        return True
+
     def input_comment_text(self, text: str):
-        """点击输入框并输入文字。每次强制点输入框，避免状态不同步。"""
-        # 始终点输入框（不依赖 _keyboard_open 标志，避免状态残留）
-        self._tap_input_field()
+        """点击输入框（用 EditText 定位）并输入文字。"""
+        self._find_and_focus_input()
+        self._keyboard_open = True
+        # 清空旧内容 + 输入新文字
         self.b.d.send_keys(text)
         self.b._rand_delay(0.5, 1.0)
 
