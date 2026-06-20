@@ -495,14 +495,36 @@ class CommentActions:
         # 选完后自动返回评论区, 不需要点完成
 
     def _tap_add_more_button(self):
-        """已选1张图后, 再次点第一个插入图片按钮添加第二张。"""
-        els = list(self.b.d(description="插入图片"))
-        if els:
-            # 点第一个(工具栏的图片按钮, 不是底部的表情图)
-            els[0].click()
-            time.sleep(1.5)
-            return True
-        return False
+        """
+        已选1张图后点+号。dump确认:
+        - [25,1836][740,1906] 图片缩略图 rid=erc CLICKABLE
+        - [744,1836][814,1906] 插入图片 rid=iv_image CLICKABLE
+        两个都试, 精准坐标兜底。
+        """
+        # 1. 点图片缩略图(rid=erc, 整个图片+文字区域)
+        try:
+            el = self.b.d(resourceId="com.ss.android.ugc.aweme:id/erc")
+            if el.exists:
+                el.click()
+                time.sleep(2.0)
+                return True
+        except Exception:
+            pass
+        
+        # 2. 点底部插入图片(rid=iv_image)
+        try:
+            el = self.b.d(resourceId="com.ss.android.ugc.aweme:id/iv_image")
+            if el.exists:
+                el.click()
+                time.sleep(2.0)
+                return True
+        except Exception:
+            pass
+        
+        # 3. 坐标兜底: 缩略图右边(0.68, 0.974)
+        self.b._tap_ratio(0.68, 0.974)
+        time.sleep(2.0)
+        return True
 
     def _select_single_image(self, index: int):
         """
