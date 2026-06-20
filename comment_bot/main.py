@@ -246,6 +246,7 @@ class CommentBot:
 
         # 关闭评论区，恢复刷视频
         self.ctrl.nav.close_comments()
+        self.ctrl.comment.reset_keyboard_state()
 
     def _simulate_video_scan(self, index: int):
         logger.info(f"[测试] 刷到视频 #{index}")
@@ -373,6 +374,7 @@ class CommentBot:
                     f"重试 {fsm.retry_count}/3"
                 )
             self.ctrl.nav.close_comments()
+            self.ctrl.comment.reset_keyboard_state()
 
         self.db.save(fsm)
 

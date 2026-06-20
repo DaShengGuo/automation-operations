@@ -72,8 +72,9 @@ for loop in range(1, 6):
         ss = ctrl.base.screenshot(f"publish_check_{loop}")
         logger.info(f"  截图保存: {ss}")
 
-    # 关闭评论区，准备下一次
+    # 关闭评论区，重置键盘状态，准备下一次
     ctrl.nav.close_comments()
+    ctrl.comment.reset_keyboard_state()
     time.sleep(2)
 
 logger.info("\n===== 5次发布测试完成 =====")

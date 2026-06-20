@@ -428,10 +428,14 @@ class CommentActions:
         time.sleep(1.5)  # 等待键盘弹出
         self._keyboard_open = True
 
+    def reset_keyboard_state(self):
+        """外部调用：关闭评论区后重置键盘状态"""
+        self._keyboard_open = False
+
     def input_comment_text(self, text: str):
-        """点击输入框并输入文字（键盘弹出后坐标改变）"""
-        if not self._keyboard_open:
-            self._tap_input_field()
+        """点击输入框并输入文字。每次强制点输入框，避免状态不同步。"""
+        # 始终点输入框（不依赖 _keyboard_open 标志，避免状态残留）
+        self._tap_input_field()
         self.b.d.send_keys(text)
         self.b._rand_delay(0.5, 1.0)
 
