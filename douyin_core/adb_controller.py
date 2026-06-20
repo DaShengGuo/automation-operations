@@ -441,15 +441,24 @@ class CommentActions:
         return self.b._find_and_tap(text="确定", timeout=2.0)
 
     def _select_image_pair(self):
-        COL_X = [0.17, 0.50, 0.83]
-        ROW_Y_START = 0.25
-        ROW_HEIGHT = 0.30
+        """
+        基于 photo_picker_dump.xml 的精确网格：
+        - 3列: x=0.166, 0.499, 0.833
+        - 行: y=0.248, 0.436, 0.623, 0.811 (间距 0.188)
+        - 第1行第1列为空(拍照), 实际图从 col=1 开始
+        - 选前2张: (0.499, 0.248) + (0.833, 0.248)
+        """
+        COL_X = [0.166, 0.499, 0.833]
+        ROW_Y = [0.248, 0.436, 0.623, 0.811]
         selected, row = 0, 0
-        while selected < 2 and row < 10:
+        while selected < 2 and row < len(ROW_Y):
             for col in range(3):
                 if selected >= 2:
                     break
-                self.b._tap_ratio(COL_X[col], ROW_Y_START + row * ROW_HEIGHT)
+                # row=0 时跳过 col=0（那是拍照选项位置，实际无图）
+                if row == 0 and col == 0:
+                    continue
+                self.b._tap_ratio(COL_X[col], ROW_Y[row])
                 time.sleep(0.8)
                 selected += 1
             row += 1
