@@ -448,13 +448,9 @@ class CommentActions:
         if not self._keyboard_open:
             self._tap_input_field()
 
-        # 点击工具栏图片按钮（在输入区上方工具栏最左边）
-        self.b._smart_find_and_tap(
-            template=None,
-            desc="图片",
-            coord=(self.IMG_BTN_X_OPEN, self.TOOLBAR_Y),
-            timeout=2.0
-        )
+        # 直接坐标点击图片按钮（工具栏最左边）
+        self.b._tap_ratio(self.IMG_BTN_X_OPEN, self.TOOLBAR_Y)
+        self.b._rand_delay()
         time.sleep(2.0)
 
         # ── 从相册选2张连续图片（对比图成对选取） ──
@@ -496,12 +492,15 @@ class CommentActions:
 
     def submit_comment(self) -> bool:
         """
-        点击发布按钮（键盘弹出后在右下角 x≈0.88, y≈0.88）。
+        点击发布按钮。先用文本匹配，失败则坐标兜底。
         """
-        return self.b._find_and_tap(text="发布", timeout=3.0) or \
-               self.b._find_and_tap(text="发送", timeout=3.0) or \
-               self.b._find_and_tap(desc="发布", timeout=3.0) or \
-               self.b._tap_ratio(self.SEND_BTN_X_OPEN, self.OPTION_BAR_Y)
+        found = self.b._find_and_tap(text="发布", timeout=2.0) or \
+                self.b._find_and_tap(text="发送", timeout=2.0)
+        if found:
+            return True
+        self.b._tap_ratio(self.SEND_BTN_X_OPEN, self.OPTION_BAR_Y)
+        self.b._rand_delay()
+        return True
 
     def verify_comment_published(self) -> bool:
         time.sleep(cfg.POST_VERIFY_WAIT)
