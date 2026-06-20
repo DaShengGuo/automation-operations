@@ -441,37 +441,14 @@ class CommentActions:
         self.b._rand_delay(0.5, 1.0)
 
     def add_comment_images(self, image_paths: list[str]) -> bool:
-        """
-        选2张对比图: 每次只选1张→自动返回→dismiss键盘→点+号。
-        """
+        """选2张对比图: _open_and_select_one内部已处理+号"""
         if not image_paths or len(image_paths) < 2:
             return False
-
-        # 第1张: 打开相册→选图→自动返回评论区
-        self._open_and_select_one(0)
-        time.sleep(3.0)
-
-        # 关闭键盘(键盘遮挡了+号)
-        try:
-            self.b.d.press('back')
-            time.sleep(1.0)
-        except Exception:
-            pass
-
-        # 评论区已出现第1张缩略图, 找+号添加第二张
-        self._tap_add_more_button()
-        time.sleep(3.0)
-
-        # 第2张: 再次打开相册→选图→自动返回
-        self._open_and_select_one(1)
+        self._open_and_select_one(0)   # 第1张: 点图片按钮→选图
         time.sleep(2.0)
-
-        # 验证: dump hierarchy 检查是否有2张图片
-        if self._verify_two_images():
-            return True
-        return True  # 继续, 不阻塞
-
-
+        self._open_and_select_one(1)   # 第2张: 点+号→选图
+        time.sleep(2.0)
+        return True
     def _verify_two_images(self) -> bool:
         """检查评论区是否已有2张图片"""
         try:
@@ -481,19 +458,19 @@ class CommentActions:
         except Exception:
             return True  # 不确定时继续, 不阻塞
     def _open_and_select_one(self, index: int):
-        """打开相册并选择单张图片"""
+        """打开相册→选图。index=0点图片按钮; index=1点+号。"""
         if index == 0:
-            # 首次: 用 desc="插入图片" 点图片按钮(第一个)
             el = self.b.d(description="插入图片")
             if el.exists:
                 el.click()
             else:
                 self.b._tap_ratio(0.045, 0.938)
-        # index>0 时相册已经通过+号打开了
-        time.sleep(2.0)
+        else:
+            # 第二张: 必须通过+号打开相册
+            self._tap_add_more_button()
+        time.sleep(3.0)
         self._select_single_image(index)
-        # 选完后自动返回评论区, 不需要点完成
-
+        time.sleep(2.5)
     def _tap_add_more_button(self):
         """
         已选1张图后点+号。dump确认:
