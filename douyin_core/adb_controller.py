@@ -389,151 +389,88 @@ class NavigateActions:
 
 
 class CommentActions:
-    """评论操作（发布评论、上传图片、删除评论）
-
-    键盘弹出后布局：
-    ┌─ 输入工具栏 y=0.76 ───────────┐
-    │ [🖼 x=0.06] [@] [😊] [#]      │
-    ├─ 文本输入 y=0.82 ─────────────┤
-    │ [____输入的文字____]           │
-    ├─ 发布选项栏 y=0.87 ───────────┤
-    │ [同时发布为作品]   [发布 x=0.88]│
-    └───────────────────────────────┘
-    │           ⌨ 键盘               │
     """
-
-    # 键盘未弹出时的坐标
-    INPUT_Y_CLOSED = 0.965
-    INPUT_X_CLOSED = 0.35
-    IMG_BTN_X_CLOSED = 0.78
-
-    # 键盘弹出后的坐标
-    TOOLBAR_Y = 0.76        # 输入工具栏（图片/@/表情按钮）
-    IMG_BTN_X_OPEN = 0.06   # 图片按钮在工具栏最左
-    INPUT_Y_OPEN = 0.82     # 文本输入区
-    OPTION_BAR_Y = 0.87     # 发布选项栏（同时发布为作品 + 发布按钮）
-    SEND_BTN_X_OPEN = 0.88  # 发送按钮在右下
+    基于 UI dump 精确选择器（代码层，不猜坐标）:
+    - 输入框: className="android.widget.EditText"
+    - 图片按钮: description="插入图片"
+    - 发送/发布: text="发布" 或 "发送"
+    """
 
     def __init__(self, base: BaseActions):
         self.b = base
         self._keyboard_open = False
 
     def reset_keyboard_state(self):
-        """外部调用：关闭评论区后重置键盘状态"""
         self._keyboard_open = False
 
     def _find_and_focus_input(self) -> bool:
-        """
-        找到评论输入框并聚焦。按优先级：
-        1. EditText 组件
-        2. focused=True 的元素
-        3. 坐标兜底
-        """
-        # 1. 找 EditText
         try:
             el = self.b.d(className="android.widget.EditText")
-            if el.exists and el.info.get("visible", False):
-                el.click()
-                time.sleep(1.5)
-                return True
-        except Exception:
-            pass
-        # 2. 找已聚焦元素
-        try:
-            el = self.b.d(focused=True)
             if el.exists:
                 el.click()
                 time.sleep(1.5)
                 return True
         except Exception:
             pass
-        # 3. 坐标兜底
-        self.b._tap_ratio(0.30, 0.97)
+        self.b._tap_ratio(0.50, 0.96)
         time.sleep(1.5)
         return True
 
     def input_comment_text(self, text: str):
-        """点击输入框（用 EditText 定位）并输入文字。"""
         self._find_and_focus_input()
         self._keyboard_open = True
-        # 清空旧内容 + 输入新文字
         self.b.d.send_keys(text)
         self.b._rand_delay(0.5, 1.0)
 
     def add_comment_images(self, image_paths: list[str]) -> bool:
-        """
-        添加评论图片（2张对比图）。
-        键盘弹出后图片按钮在左下角(x≈0.12, y≈0.88)。
-        从相册选图：从上到下连续选2张（对比图成对），不跳过。
-        """
         if not image_paths or len(image_paths) < 2:
             return False
-
-        # 确保键盘已弹出，图片按钮在左下
-        if not self._keyboard_open:
-            self._tap_input_field()
-
-        # 直接坐标点击图片按钮（工具栏最左边）
-        self.b._tap_ratio(self.IMG_BTN_X_OPEN, self.TOOLBAR_Y)
+        el = self.b.d(description="插入图片")
+        if el.exists:
+            el.click()
+        else:
+            self.b._tap_ratio(0.045, 0.938)
         self.b._rand_delay()
         time.sleep(2.0)
-
-        # ── 从相册选2张连续图片（对比图成对选取） ──
-        # 相册网格：3列，图片按文件名排序（ADB推送的图片在最前面）
-        # 从上到下、从左到右连续选2张
         self._select_image_pair()
         time.sleep(1.0)
-
-        # 点击"完成"确认选图
-        return self.b._find_and_tap(text="完成", timeout=2.0) or \
-               self.b._find_and_tap(text="确定", timeout=2.0) or \
-               self.b._find_and_tap(desc="完成", timeout=2.0)
+        el_done = self.b.d(text="完成")
+        if el_done.exists:
+            el_done.click()
+            return True
+        return self.b._find_and_tap(text="确定", timeout=2.0)
 
     def _select_image_pair(self):
-        """
-        在相册网格中选择连续2张图片（对比图对）。
-        3列网格布局，按行从上到下选取：
-          第1张：(0.17, 0.25)  第1列
-          第2张：(0.50, 0.25)  第2列（同行的下一张）
-        如果点击后有选中反馈（勾选标记），说明点到了。
-        """
-        # 相册网格坐标（3列布局）
-        COL_X = [0.17, 0.50, 0.83]  # 第1/2/3列横坐标
-        ROW_Y_START = 0.25           # 第一行纵坐标
-        ROW_HEIGHT = 0.30            # 每行高度
-
-        selected = 0
-        row = 0
+        COL_X = [0.17, 0.50, 0.83]
+        ROW_Y_START = 0.25
+        ROW_HEIGHT = 0.30
+        selected, row = 0, 0
         while selected < 2 and row < 10:
             for col in range(3):
                 if selected >= 2:
                     break
-                x = COL_X[col]
-                y = ROW_Y_START + row * ROW_HEIGHT
-                self.b._tap_ratio(x, y)
-                time.sleep(0.8)  # 等选中反馈
+                self.b._tap_ratio(COL_X[col], ROW_Y_START + row * ROW_HEIGHT)
+                time.sleep(0.8)
                 selected += 1
             row += 1
 
     def submit_comment(self) -> bool:
-        """
-        点击发布按钮。先用文本匹配，失败则坐标兜底。
-        """
-        found = self.b._find_and_tap(text="发布", timeout=2.0) or \
-                self.b._find_and_tap(text="发送", timeout=2.0)
-        if found:
-            return True
-        self.b._tap_ratio(self.SEND_BTN_X_OPEN, self.OPTION_BAR_Y)
+        for txt in ["发布", "发送"]:
+            el = self.b.d(text=txt)
+            if el.exists:
+                el.click()
+                self.b._rand_delay()
+                return True
+        self.b._tap_ratio(0.88, 0.94)
         self.b._rand_delay()
         return True
-
     def verify_comment_published(self) -> bool:
         time.sleep(cfg.POST_VERIFY_WAIT)
         xml = self.b.dump_hierarchy()
-        return "删除" in xml or "刚刚" in xml
+        return '删除' in xml or '刚刚' in xml
 
     def delete_my_comment(self) -> bool:
-        found = self.b._find_and_tap(text="删除", timeout=2.0)
+        found = self.b._find_and_tap(text='删除', timeout=2.0)
         if not found:
             self.b.d.long_click(
                 int(self.b.screen_w * 0.5),
@@ -541,22 +478,20 @@ class CommentActions:
                 duration=1.0
             )
             time.sleep(1.0)
-            found = self.b._find_and_tap(text="删除", timeout=2.0)
+            found = self.b._find_and_tap(text='删除', timeout=2.0)
         if found:
             time.sleep(0.5)
-            self.b._find_and_tap(text="确认", timeout=1.5) or \
-            self.b._find_and_tap(text="确定", timeout=1.5)
+            self.b._find_and_tap(text='确认', timeout=1.5) or             self.b._find_and_tap(text='确定', timeout=1.5)
         return found
 
     def reply_to_comment(self, reply_text: str) -> bool:
-        found = self.b._find_and_tap(text="回复", timeout=2.0)
+        found = self.b._find_and_tap(text='回复', timeout=2.0)
         if not found:
             return False
         time.sleep(0.5)
         self.b.d.send_keys(reply_text)
         self.b._rand_delay(0.3, 0.8)
         return self.submit_comment()
-
 
 class UserActions:
     """用户操作（关注、私信）"""
