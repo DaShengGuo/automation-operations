@@ -377,15 +377,15 @@ class NavigateActions:
 class CommentActions:
     """评论操作（发布评论、上传图片、删除评论）
 
-    坐标说明（两个状态）：
-    ┌─ 键盘未弹出（刚打开评论区）─────────────────────┐
-    │  [输入框 x=0.35]  [🖼图 x=0.78] [@] [😊]  ← y=0.965 │
-    └────────────────────────────────────────────────┘
-    ┌─ 键盘弹出后 ───────────────────────────────────┐
-    │  [🖼图片(左下)]  [输入框(上移)]  [发布(右下)]      │
-    │    x≈0.12          x≈0.50         x≈0.88        │
-    │    y≈0.88           y≈0.88         y≈0.88        │
-    └────────────────────────────────────────────────┘
+    键盘弹出后布局：
+    ┌─ 输入工具栏 y=0.76 ───────────┐
+    │ [🖼 x=0.06] [@] [😊] [#]      │
+    ├─ 文本输入 y=0.82 ─────────────┤
+    │ [____输入的文字____]           │
+    ├─ 发布选项栏 y=0.87 ───────────┤
+    │ [同时发布为作品]   [发布 x=0.88]│
+    └───────────────────────────────┘
+    │           ⌨ 键盘               │
     """
 
     # 键盘未弹出时的坐标
@@ -394,8 +394,10 @@ class CommentActions:
     IMG_BTN_X_CLOSED = 0.78
 
     # 键盘弹出后的坐标
-    INPUT_Y_OPEN = 0.88
-    IMG_BTN_X_OPEN = 0.12   # 图片按钮在左下
+    TOOLBAR_Y = 0.76        # 输入工具栏（图片/@/表情按钮）
+    IMG_BTN_X_OPEN = 0.06   # 图片按钮在工具栏最左
+    INPUT_Y_OPEN = 0.82     # 文本输入区
+    OPTION_BAR_Y = 0.87     # 发布选项栏（同时发布为作品 + 发布按钮）
     SEND_BTN_X_OPEN = 0.88  # 发送按钮在右下
 
     def __init__(self, base: BaseActions):
@@ -432,11 +434,11 @@ class CommentActions:
         if not self._keyboard_open:
             self._tap_input_field()
 
-        # 点击左下角图片按钮
+        # 点击工具栏图片按钮（在输入区上方工具栏最左边）
         self.b._smart_find_and_tap(
             template=None,
             desc="图片",
-            coord=(self.IMG_BTN_X_OPEN, self.INPUT_Y_OPEN),
+            coord=(self.IMG_BTN_X_OPEN, self.TOOLBAR_Y),
             timeout=2.0
         )
         time.sleep(2.0)
@@ -485,7 +487,7 @@ class CommentActions:
         return self.b._find_and_tap(text="发布", timeout=3.0) or \
                self.b._find_and_tap(text="发送", timeout=3.0) or \
                self.b._find_and_tap(desc="发布", timeout=3.0) or \
-               self.b._tap_ratio(self.SEND_BTN_X_OPEN, self.INPUT_Y_OPEN)
+               self.b._tap_ratio(self.SEND_BTN_X_OPEN, self.OPTION_BAR_Y)
 
     def verify_comment_published(self) -> bool:
         time.sleep(cfg.POST_VERIFY_WAIT)
