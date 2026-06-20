@@ -273,13 +273,31 @@ class NavigateActions:
         self.b._rand_delay(0.8, 1.5)
 
     def open_comments(self) -> bool:
-        """打开当前视频评论区 — 图像匹配优先，不受UI文字变化影响"""
-        self.b._smart_find_and_tap(
-            template="comment_btn",
-            desc="评论",
-            coord=(0.93, 0.71),
-            timeout=3.0
-        )
+        """
+        打开评论区。评论按钮真实 desc="评论3828，按钮"(数字变化)。
+        用 XPath contains 匹配，避免坐标误触暂停/+按钮。
+        """
+        # 1. 模板匹配
+        try:
+            screen = self.b._capture_screen()
+            pos = self.b.tm.find("comment_btn", screen)
+            if pos:
+                self.b._tap(pos[0], pos[1])
+                time.sleep(1.5)
+                return True
+        except Exception:
+            pass
+        # 2. XPath contains 匹配
+        try:
+            el = self.b.d.xpath('//*[contains(@content-desc, "评论") and @clickable="true"]')
+            if el.exists:
+                el.click()
+                time.sleep(1.5)
+                return True
+        except Exception:
+            pass
+        # 3. 坐标兜底: center=(0.940, 0.683)
+        self.b._tap_ratio(0.940, 0.683)
         time.sleep(1.5)
         return True
 
