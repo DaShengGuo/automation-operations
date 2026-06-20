@@ -471,37 +471,53 @@ class CommentActions:
         time.sleep(3.0)
         self._select_single_image(index)
         time.sleep(2.5)
+
+    def _find_right_insert_img(self):
+        for e in self.b.d(description="插入图片"):
+            try:
+                b = e.info.get('bounds', {})
+                if b.get('left', 0) > 500:
+                    return e
+            except Exception:
+                continue
+        return None
+
     def _tap_add_more_button(self):
         """
-        已选1张图后点+号。dump确认:
-        - [25,1836][740,1906] 图片缩略图 rid=erc CLICKABLE
-        - [744,1836][814,1906] 插入图片 rid=iv_image CLICKABLE
-        两个都试, 精准坐标兜底。
+        已选1张图后打开相册选第2张。按优先级依次尝试:
+        1. rid=iv_image (底部插入图片)  2. rid=erc (缩略图)
+        3. desc=插入图片且x>500        4. 缩略图区域坐标(0.35,0.97)
+        5. 插入图片按钮坐标(0.72,0.97)  6. 两者之间(0.68,0.97)
+        7. 第一张图之后下一个(0.80,0.25)
         """
-        # 1. 点图片缩略图(rid=erc, 整个图片+文字区域)
-        try:
-            el = self.b.d(resourceId="com.ss.android.ugc.aweme:id/erc")
-            if el.exists:
-                el.click()
-                time.sleep(2.0)
-                return True
-        except Exception:
-            pass
-        
-        # 2. 点底部插入图片(rid=iv_image)
-        try:
-            el = self.b.d(resourceId="com.ss.android.ugc.aweme:id/iv_image")
-            if el.exists:
-                el.click()
-                time.sleep(2.0)
-                return True
-        except Exception:
-            pass
-        
-        # 3. 坐标兜底: 缩略图右边(0.68, 0.974)
-        self.b._tap_ratio(0.68, 0.974)
-        time.sleep(2.0)
-        return True
+        attempts = [
+            ('rid=iv_image', lambda: self.b.d(resourceId="com.ss.android.ugc.aweme:id/iv_image")),
+            ('rid=erc', lambda: self.b.d(resourceId="com.ss.android.ugc.aweme:id/erc")),
+            ('desc x>500', lambda: self._find_right_insert_img()),
+            ('coord 0.35,0.97', None),
+            ('coord 0.72,0.97', None),
+            ('coord 0.68,0.97', None),
+            ('coord 0.80,0.25', None),
+        ]
+        for name, fn in attempts:
+            try:
+                if fn:
+                    el = fn()
+                    if el and el.exists:
+                        el.click()
+                        time.sleep(1.5)
+                        return True
+                else:
+                    x, y = {'coord 0.35,0.97': (0.35,0.97),
+                            'coord 0.72,0.97': (0.72,0.97),
+                            'coord 0.68,0.97': (0.68,0.97),
+                            'coord 0.80,0.25': (0.80,0.25)}[name]
+                    self.b._tap_ratio(x, y)
+                    time.sleep(1.5)
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _select_single_image(self, index: int):
         """
