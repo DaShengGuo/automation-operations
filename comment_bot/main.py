@@ -54,6 +54,7 @@ class CommentBot:
         self.db = StateDB(str(cfg.STATE_DB))
         self.no_dashboard = no_dashboard
         self._stop_event = threading.Event()
+        self._video_scanned_count = 0
 
     def setup(self):
         logger.info("=" * 50)
@@ -176,12 +177,7 @@ class CommentBot:
                 video_index += 1
                 video_count_since_rest += 1
 
-                # 4. 每20个视频校准一次：确保还在推荐Tab（防止误触跳转到朋友/消息页）
-                if video_index > 0 and video_index % 20 == 0 and not self.test_mode:
-                    self.ctrl.nav.open_recommend_tab()
-                    time.sleep(1.0)
-
-                # 5. 定期休息
+                # 4. 定期休息
                 if video_count_since_rest >= cfg.REST_EVERY_N_VIDEOS:
                     rest_sec = random.randint(
                         cfg.REST_DURATION_MIN, cfg.REST_DURATION_MAX
@@ -204,13 +200,20 @@ class CommentBot:
 
     def _scan_video(self):
         """
-        真实模式：手动滑动刷视频（效率优先）。
-        抖音推荐Tab会自动连播，但我们主动手动滑可以控制节奏、更快跳过不相关内容。
-        策略：立即截图 → OCR判断 → 非目标直接滑走 → 目标则打开评论区。
+        刷视频主流程：轻滑 → 等加载 → 截图OCR → 目标则评论 → 非目标继续。
+        每3个视频才截图OCR一次，减少计算开销和操作频率。
         """
-        # 等视频渲染稳定后截图
-        time.sleep(random.uniform(0.8, 1.5))
-        ss = self.ctrl.base.screenshot(f"video_scan_{int(time.time())}")
+        # 轻滑到下一个视频（swipe内部已含等待）
+        self.ctrl.nav.swipe_next_video()
+
+        # 每3个视频才做一次内容分析（减少OCR负担和异常操作）
+        if self._video_scanned_count % 3 != 0:
+            self._video_scanned_count += 1
+            return
+        self._video_scanned_count += 1
+
+        # 等视频完全加载
+        time.sleep(random.uniform(1.0, 2.0))
 
         # 检查验证码
         if self.ctrl.check_captcha():
@@ -218,38 +221,31 @@ class CommentBot:
             self.interrupt.pause()
             return
 
-        # OCR 判断视频内容
+        # 截图 + OCR
+        ss = self.ctrl.base.screenshot(f"video_scan_{int(time.time())}")
         result = self.filter.check_content(ss)
 
         if result != FilterResult.PASS:
-            # 非目标 → 手动滑走（比等自动连播快）
-            time.sleep(random.uniform(0.5, 1.0))
-            self.ctrl.nav.swipe_next_video()
-            return
+            return  # 非目标，等下次swipe
 
-        # 目标视频 → 打开评论区（暂停连播）
+        # ── 目标视频 ──
+        logger.info(f"[目标视频] 发现相关内容，打开评论区...")
         if not self.ctrl.nav.open_comments():
-            self.ctrl.nav.swipe_next_video()
             return
 
-        # 评论区已打开，分析时效
-        time.sleep(1.5)
-        comment_ss = self.ctrl.base.screenshot(
-            f"comments_{int(time.time())}"
-        )
+        time.sleep(2.0)
+        comment_ss = self.ctrl.base.screenshot(f"comments_{int(time.time())}")
         time_texts = crop_and_ocr(comment_ss, (0.65, 0.25, 0.92, 0.85))
         times = [parse_comment_time(t) for t in time_texts]
         times = [t for t in times if t < 99999]
 
         if times:
             score = self.filter.calc_freshness_score(times)
-            fres = self.filter.should_comment(score)
-            if fres == FilterResult.PASS:
+            if self.filter.should_comment(score) == FilterResult.PASS:
                 self._create_comment_task(ss)
 
-        # 关闭评论区，继续手动滑下一个
+        # 关闭评论区，恢复刷视频
         self.ctrl.nav.close_comments()
-        self.ctrl.nav.swipe_next_video()
 
     def _simulate_video_scan(self, index: int):
         logger.info(f"[测试] 刷到视频 #{index}")

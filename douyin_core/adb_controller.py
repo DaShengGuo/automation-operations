@@ -261,8 +261,16 @@ class NavigateActions:
         time.sleep(1.5)
 
     def swipe_next_video(self):
-        """手动下滑刷下一个视频"""
-        self.b._swipe_up(0.65)
+        """
+        轻滑刷下一个视频。
+        从屏幕中间向上轻扫（不是从底部！避免点到暂停/底部Tab）。
+        """
+        sx = int(self.b.screen_w * 0.5)
+        sy = int(self.b.screen_h * 0.55)
+        ey = int(self.b.screen_h * 0.25)
+        self.b.d.swipe(sx, sy, sx, ey, duration=0.3)
+        # 等视频加载
+        self.b._rand_delay(0.8, 1.5)
 
     def open_comments(self) -> bool:
         """打开当前视频评论区 — 图像匹配优先，不受UI文字变化影响"""
