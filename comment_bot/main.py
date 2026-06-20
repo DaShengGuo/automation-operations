@@ -307,6 +307,9 @@ class CommentBot:
         else:
             self.ctrl.nav.open_comments()
             time.sleep(1.0)
+            # 滚动到底部确保输入栏完全可见
+            self.ctrl.base._swipe_up(0.05)  # 轻滑确保输入栏露出
+            time.sleep(0.5)
             self.ctrl.comment.input_comment_text(fsm.task.copywriting)
             if fsm.task.image_paths:
                 self.ctrl.comment.add_comment_images(fsm.task.image_paths)

@@ -377,19 +377,44 @@ class NavigateActions:
 class CommentActions:
     """评论操作（发布评论、上传图片、删除评论）"""
 
+    # ── 评论区底部输入栏坐标 ──
+    COMMENT_INPUT_Y = 0.965   # 输入栏纵坐标（紧贴屏幕底部）
+    COMMENT_INPUT_X = 0.35    # 输入框横坐标（输入栏左侧文字区域）
+
     def __init__(self, base: BaseActions):
         self.b = base
 
     def input_comment_text(self, text: str):
-        self.b._tap_ratio(0.5, 0.92)
+        """
+        点击评论区底部输入框并输入文字。
+        注意：输入框在屏幕最底部(y≈0.965)，左边是文字输入区(x≈0.35)。
+        不能点太高或太靠右，否则会点到用户头像/评论内容。
+        """
+        # 用智能定位：图像模板兜底 + 坐标
+        self.b._smart_find_and_tap(
+            template=None,  # 评论区输入框变化大，暂不用模板
+            text=None,
+            desc=None,
+            coord=(self.COMMENT_INPUT_X, self.COMMENT_INPUT_Y),
+        )
         time.sleep(1.0)
         self.b.d.send_keys(text)
         self.b._rand_delay(0.5, 1.0)
 
     def add_comment_images(self, image_paths: list[str]) -> bool:
+        """
+        点击评论区图片按钮添加图片。
+        图片按钮在输入栏右侧第一个图标(x≈0.78, y≈0.965)。
+        """
         if not image_paths:
             return True
-        self.b._tap_ratio(0.12, 0.92)
+        # 点击图片按钮（输入栏右侧第一个图标）
+        self.b._smart_find_and_tap(
+            template=None,
+            desc="图片",
+            coord=(0.78, self.COMMENT_INPUT_Y),
+            timeout=2.0
+        )
         time.sleep(2.0)
         for _ in image_paths[:2]:
             self.b._find_and_tap(text="最近", timeout=2.0) or \
@@ -402,10 +427,11 @@ class CommentActions:
                self.b._find_and_tap(desc="完成", timeout=2.0)
 
     def submit_comment(self) -> bool:
+        """点击发布/发送按钮"""
         return self.b._find_and_tap(text="发布", timeout=3.0) or \
                self.b._find_and_tap(text="发送", timeout=3.0) or \
                self.b._find_and_tap(desc="发布", timeout=3.0) or \
-               self.b._tap_ratio(0.88, 0.92)
+               self.b._tap_ratio(0.88, self.COMMENT_INPUT_Y)
 
     def verify_comment_published(self) -> bool:
         time.sleep(cfg.POST_VERIFY_WAIT)
