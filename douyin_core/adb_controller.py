@@ -495,25 +495,19 @@ class CommentActions:
         # 选完后自动返回评论区, 不需要点完成
 
     def _tap_add_more_button(self):
-        """
-        评论区已有1张图片时, 第二个 desc="插入图片" 就是+号。
-        UI dump: 第1个在 [21,1762], 第2个(即+号)在 [744,1836]。
-        取 count>1 时用第2个。
-        """
-        try:
-            els = self.b.d(description="插入图片")
-            if els.count > 1:
+        """已选1张图后点+号(第2个插入图片)。轮询等待最多5秒。"""
+        for _ in range(10):
+            els = list(self.b.d(description="插入图片"))
+            if len(els) >= 2:
                 els[1].click()
                 time.sleep(1.5)
-                return
-            elif els.count == 1:
-                els[0].click()
-                time.sleep(1.5)
-                return
-        except Exception:
-            pass
-        # 兜底: 第2个位置 ratio=(0.721, 0.974)
-        self.b._tap_ratio(0.721, 0.974)
+                return True
+            time.sleep(0.5)
+        els = list(self.b.d(description="插入图片"))
+        if els:
+            els[0].click()
+            time.sleep(1.5)
+        return bool(els)
 
     def _select_single_image(self, index: int):
         """
