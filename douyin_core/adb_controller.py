@@ -463,8 +463,12 @@ class CommentActions:
     def _open_and_select_one(self, index: int):
         """打开相册并选择单张图片"""
         if index == 0:
-            # 首次: 点图片按钮打开相册
-            self.b._tap_ratio(0.06, 0.76)
+            # 首次: 用 desc="插入图片" 点图片按钮(第一个)
+            el = self.b.d(description="插入图片")
+            if el.exists:
+                el.click()
+            else:
+                self.b._tap_ratio(0.045, 0.938)
         # index>0 时相册已经通过+号打开了
         time.sleep(2.0)
         self._select_single_image(index)
@@ -472,24 +476,24 @@ class CommentActions:
 
     def _tap_add_more_button(self):
         """
-        评论区已有1张图片时, 找+号添加更多。
-        图片缩略图右边的+号, 用content-desc或坐标定位。
+        评论区已有1张图片时, 第二个 desc="插入图片" 就是+号。
+        UI dump: 第1个在 [21,1762], 第2个(即+号)在 [744,1836]。
+        取 count>1 时用第2个。
         """
-        # 尝试找描述包含 添加/加 的 ImageView
         try:
-            el = self.b.d.xpath('//*[contains(@content-desc, "添加") or contains(@content-desc, "加")]')
-            if el.exists:
-                el.click()
+            els = self.b.d(description="插入图片")
+            if els.count > 1:
+                els[1].click()
+                time.sleep(1.5)
+                return
+            elif els.count == 1:
+                els[0].click()
+                time.sleep(1.5)
                 return
         except Exception:
             pass
-        # 尝试找 text=加 的元素
-        el = self.b.d(text="加")
-        if el.exists:
-            el.click()
-            return
-        # 坐标兜底: 图片缩略图大约在左下区域, +号在其右方
-        self.b._tap_ratio(0.30, 0.88)
+        # 兜底: 第2个位置 ratio=(0.721, 0.974)
+        self.b._tap_ratio(0.721, 0.974)
 
     def _select_single_image(self, index: int):
         """
