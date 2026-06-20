@@ -250,8 +250,14 @@ class NavigateActions:
         self.b = base
 
     def open_recommend_tab(self):
-        """点击底部「首页」回到推荐Tab"""
-        self.b._tap_ratio(TAB_HOME, TAB_Y)
+        """点击底部「首页」回到推荐Tab — 文本匹配优先，坐标兜底"""
+        self.b._smart_find_and_tap(
+            template=None,
+            text="首页",
+            desc="首页",
+            coord=(TAB_HOME, TAB_Y),
+            timeout=3.0
+        )
         time.sleep(1.5)
 
     def swipe_next_video(self):

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import logging
 import random
-import signal
 import sys
 import threading
 import time
@@ -54,6 +53,7 @@ class CommentBot:
         self.filter = VideoFilter()
         self.db = StateDB(str(cfg.STATE_DB))
         self.no_dashboard = no_dashboard
+        self._stop_event = threading.Event()
 
     def setup(self):
         logger.info("=" * 50)
@@ -88,9 +88,7 @@ class CommentBot:
                 f"[Dashboard] http://{cfg.DASHBOARD_HOST}:{cfg.DASHBOARD_PORT}"
             )
 
-        signal.signal(signal.SIGINT, self._handle_interrupt)
-        signal.signal(signal.SIGTERM, self._handle_interrupt)
-        logger.info("[系统] 初始化完成，开始运行")
+        logger.info("[系统] 初始化完成，开始运行（Ctrl+C 停止）")
 
     def _sync_images_to_emulator(self):
         """
@@ -141,7 +139,8 @@ class CommentBot:
         video_count_since_rest = 0
         last_badge_check = time.time()
 
-        while self.interrupt.state.name != "STOPPED":
+        while (self.interrupt.state.name != "STOPPED"
+               and not self._stop_event.is_set()):
             if self.interrupt.is_paused:
                 time.sleep(0.5)
                 continue
@@ -546,7 +545,15 @@ def main():
     args = parser.parse_args()
 
     bot = CommentBot(no_dashboard=args.no_dashboard, test_mode=args.test)
-    bot.run()
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("\n[中断] 收到 Ctrl+C，正在安全退出...")
+        bot._stop_event.set()
+        bot.interrupt.stop()
+        bot._shutdown()
+        logger.info("[中断] 已安全退出")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
