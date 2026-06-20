@@ -1,6 +1,11 @@
 """
 douyin_core/adb_controller.py
-抖音自动化框架 — ADB/uiautomator2 统一操作层
+抖音自动化框架 — ADB/uiautomator2 + Airtest图像识别 混合操作层
+
+三级定位策略（按优先级）：
+  1. 图像模板匹配（Airtest）— 不受UI文本变化影响，抖音更新也能识别
+  2. UI层级文本/描述匹配（uiautomator2）
+  3. 屏幕坐标兜底
 
 坐标来源：用户提供截图 + 智谱视觉分析
   底部 5 个 Tab（从左到右）：首页(0.10) 朋友(0.30) +(0.50) 消息(0.70) 我(0.90)
@@ -9,16 +14,21 @@ douyin_core/adb_controller.py
 """
 from __future__ import annotations
 
+import logging
 import time
 import random
 from pathlib import Path
 from typing import Optional
 
+import cv2
+import numpy as np
 import uiautomator2 as u2
 
 from douyin_core import config as cfg
 
-# ── 底部导航 Tab 横坐标（5等分，基于1080px宽度实测） ──
+logger = logging.getLogger(__name__)
+
+# ── 底部导航 Tab 横坐标 ──
 TAB_HOME = 0.10       # 首页
 TAB_FRIENDS = 0.30    # 朋友
 TAB_CREATE = 0.50     # + 号
@@ -26,15 +36,100 @@ TAB_MESSAGES = 0.70   # 消息
 TAB_ME = 0.90         # 我
 TAB_Y = 0.96          # 底部 Tab 纵坐标
 
+# ── 模板图片目录 ──
+TEMPLATES_DIR = cfg.PROJECT_ROOT / "materials" / "templates"
+
+# 模板匹配阈值（0-1，越高越严格）
+TEMPLATE_THRESHOLD = 0.7
+
+
+class TemplateMatcher:
+    """
+    图像模板匹配器。
+    基于 OpenCV 模板匹配（Airtest 核心算法），不依赖 Airtest 框架以减少耦合。
+    支持屏幕缩放适配。
+    """
+
+    def __init__(self, screen_w: int, screen_h: int):
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self._cache: dict[str, np.ndarray] = {}
+
+    def _load_template(self, name: str) -> Optional[np.ndarray]:
+        """加载模板图片（带缓存）"""
+        if name in self._cache:
+            return self._cache[name]
+        path = TEMPLATES_DIR / f"{name}.png"
+        if not path.exists():
+            logger.debug(f"[TemplateMatcher] 模板不存在: {path}")
+            return None
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if img is not None:
+            self._cache[name] = img
+        return img
+
+    def find(self, template_name: str, screenshot: np.ndarray = None,
+             threshold: float = None) -> Optional[tuple[int, int]]:
+        """
+        在屏幕截图中查找模板，返回中心坐标 (x, y)，未找到返回 None。
+        支持多尺度匹配以适应不同屏幕分辨率。
+        """
+        if threshold is None:
+            threshold = TEMPLATE_THRESHOLD
+
+        tpl = self._load_template(template_name)
+        if tpl is None:
+            return None
+
+        if screenshot is None:
+            return None
+
+        th, tw = tpl.shape[:2]
+        sh, sw = screenshot.shape[:2]
+
+        if tw > sw or th > sh:
+            return None
+
+        # 多尺度匹配：原始 + 0.9x + 1.1x 缩放
+        scales = [1.0, 0.9, 1.1]
+        best_val = 0
+        best_pos = None
+
+        for scale in scales:
+            nw, nh = int(tw * scale), int(th * scale)
+            if nw > sw or nh > sh or nw < 10 or nh < 10:
+                continue
+            resized = cv2.resize(tpl, (nw, nh))
+            result = cv2.matchTemplate(screenshot, resized, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            if max_val > best_val:
+                best_val = max_val
+                best_pos = (max_loc[0] + nw // 2, max_loc[1] + nh // 2)
+
+        if best_val >= threshold and best_pos is not None:
+            logger.debug(
+                f"[TemplateMatcher] 找到 '{template_name}' "
+                f"置信度={best_val:.2f} 位置={best_pos}"
+            )
+            return best_pos
+
+        return None
+
+    def exists(self, template_name: str, screenshot: np.ndarray = None,
+               threshold: float = None) -> bool:
+        return self.find(template_name, screenshot, threshold) is not None
+
 
 class BaseActions:
-    """基础设备操作（点击/滑动/截图/按键）"""
+    """基础设备操作（点击/滑动/截图/按键/智能定位）"""
 
     def __init__(self, device: u2.Device):
         self.d = device
         ws = self.d.window_size()
         self.screen_w = ws[0]
         self.screen_h = ws[1]
+        self.tm = TemplateMatcher(self.screen_w, self.screen_h)
 
     def _rand_delay(self, lo: float = None, hi: float = None):
         time.sleep(random.uniform(
@@ -62,8 +157,58 @@ class BaseActions:
         self.d.press("back")
         self._rand_delay(0.8, 1.5)
 
+    def _capture_screen(self) -> np.ndarray:
+        """截图并转为 numpy 数组（用于模板匹配）"""
+        pil_img = self.d.screenshot()
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    def _smart_find_and_tap(self,
+                            template: str = None,
+                            text: str = None,
+                            desc: str = None,
+                            coord: tuple[float, float] = None,
+                            timeout: float = 3.0) -> bool:
+        """
+        三级混合定位点击（图像 > UI层级 > 坐标）：
+        1. template: 模板文件名（不含.png），存在则优先图像匹配
+        2. text/desc: UI 层级文本匹配（uiautomator2）
+        3. coord: 坐标兜底 (rx, ry)
+        """
+        # ── 第一级：图像模板匹配 ──
+        if template:
+            try:
+                screen = self._capture_screen()
+                pos = self.tm.find(template, screen)
+                if pos is not None:
+                    self._tap(pos[0], pos[1])
+                    return True
+            except Exception as e:
+                logger.debug(f"[SmartTap] 模板匹配异常: {e}")
+
+        # ── 第二级：UI层级文本匹配 ──
+        if text or desc:
+            try:
+                if text:
+                    el = self.d(text=text)
+                else:
+                    el = self.d(description=desc)
+                if el.wait(timeout=timeout):
+                    el.click()
+                    self._rand_delay()
+                    return True
+            except Exception:
+                pass
+
+        # ── 第三级：坐标兜底 ──
+        if coord:
+            self._tap_ratio(coord[0], coord[1])
+            return True
+
+        return False
+
     def _find_and_tap(self, text: str = None, desc: str = None,
                       timeout: float = 5.0) -> bool:
+        """兼容旧接口：纯UI层级匹配"""
         try:
             if text:
                 el = self.d(text=text)
@@ -114,10 +259,13 @@ class NavigateActions:
         self.b._swipe_up(0.65)
 
     def open_comments(self) -> bool:
-        """打开当前视频评论区（右侧评论按钮）"""
-        found = self.b._find_and_tap(desc="评论", timeout=3.0)
-        if not found:
-            self.b._tap_ratio(0.93, 0.71)  # 右侧评论区按钮（截图实测）
+        """打开当前视频评论区 — 图像匹配优先，不受UI文字变化影响"""
+        self.b._smart_find_and_tap(
+            template="comment_btn",
+            desc="评论",
+            coord=(0.93, 0.71),
+            timeout=3.0
+        )
         time.sleep(1.5)
         return True
 
@@ -168,23 +316,28 @@ class NavigateActions:
         return False
 
     def open_messages_tab(self) -> bool:
-        """点击底部「消息」Tab（第4个Tab，实测 0.70）"""
-        self.b._tap_ratio(TAB_MESSAGES, TAB_Y)
+        """点击底部「消息」Tab — 图像模板优先，然后坐标"""
+        self.b._smart_find_and_tap(
+            template="msg_tab",
+            desc="消息",
+            coord=(TAB_MESSAGES, TAB_Y),
+            timeout=2.0
+        )
         time.sleep(2.0)
         return True
 
     def open_interaction_messages(self) -> bool:
-        """在消息页面中点击「互动消息」入口"""
-        found = self.b._find_and_tap(text="互动消息", timeout=3.0) or \
-                self.b._find_and_tap(desc="互动消息", timeout=3.0)
+        """在消息页面中点击「互动消息」入口 — 图像模板优先"""
+        found = self.b._smart_find_and_tap(
+            template="interaction_msg",
+            text="互动消息",
+            coord=(0.20, 0.28),
+            timeout=3.0
+        )
         if not found:
-            found = self.b._find_and_tap(text="互动", timeout=2.0)
-        if not found:
-            # 坐标兜底：消息页中上部，互动消息入口（截图实测≈0.20, 0.28）
-            self.b._tap_ratio(0.20, 0.28)
-            found = True
+            self.b._find_and_tap(text="互动", timeout=2.0)
         time.sleep(1.5)
-        return found
+        return True
 
     def open_first_reply_detail(self) -> bool:
         """
