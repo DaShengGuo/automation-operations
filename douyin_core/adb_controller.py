@@ -495,19 +495,14 @@ class CommentActions:
         # 选完后自动返回评论区, 不需要点完成
 
     def _tap_add_more_button(self):
-        """已选1张图后点+号(第2个插入图片)。轮询等待最多5秒。"""
-        for _ in range(10):
-            els = list(self.b.d(description="插入图片"))
-            if len(els) >= 2:
-                els[1].click()
-                time.sleep(1.5)
-                return True
-            time.sleep(0.5)
+        """已选1张图后, 再次点第一个插入图片按钮添加第二张。"""
         els = list(self.b.d(description="插入图片"))
         if els:
+            # 点第一个(工具栏的图片按钮, 不是底部的表情图)
             els[0].click()
             time.sleep(1.5)
-        return bool(els)
+            return True
+        return False
 
     def _select_single_image(self, index: int):
         """
