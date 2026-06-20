@@ -23,6 +23,14 @@ SCREEN_WIDTH = 1080
 SCREEN_HEIGHT = 1920
 DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
 MUMU_ADB_ADDR = os.environ.get("MUMU_ADB_ADDR", "127.0.0.1:7555")
+# ADB 可执行文件路径（系统 PATH 或 Android SDK）
+_ADB_CANDIDATES = [
+    os.environ.get("ADB_PATH", ""),
+    str(Path.home() / "AppData/Local/Android/Sdk/platform-tools/adb.exe"),
+    str(Path.home() / "AppData/Local/Android/Sdk/platform-tools/adb"),
+    "adb",  # fallback: 依赖 PATH
+]
+ADB_EXECUTABLE = next((p for p in _ADB_CANDIDATES if p and Path(p).exists()), "adb")
 
 # ── 运营时间 ──
 DAY_START_HOUR = 10

@@ -62,6 +62,7 @@ class CommentBot:
 
         if not self.test_mode:
             self.ctrl = DouyinController()
+            self._sync_images_to_emulator()
             self.ctrl.open_douyin()
         else:
             logger.info("[测试模式] 跳过设备连接")
@@ -85,6 +86,46 @@ class CommentBot:
         signal.signal(signal.SIGINT, self._handle_interrupt)
         signal.signal(signal.SIGTERM, self._handle_interrupt)
         logger.info("[系统] 初始化完成，开始运行")
+
+    def _sync_images_to_emulator(self):
+        """
+        启动时通过 ADB 将对比图推送到模拟器相册。
+        推送到 /sdcard/DCIM/douyin_bot/ → 触发媒体扫描 → 相册中可见。
+        """
+        import subprocess
+        images_dir = cfg.MATERIALS_DIR / "images"
+        if not images_dir.exists():
+            logger.warning("[图库同步] images 目录不存在，跳过")
+            return
+
+        dest = "/sdcard/DCIM/douyin_bot/"
+        adb = cfg.ADB_EXECUTABLE
+
+        try:
+            subprocess.run([adb, "-s", cfg.MUMU_ADB_ADDR, "shell",
+                           f"mkdir -p {dest}"],
+                          capture_output=True, timeout=10)
+            files = list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png"))
+            pushed = 0
+            for f in files:
+                result = subprocess.run(
+                    [adb, "-s", cfg.MUMU_ADB_ADDR, "push", str(f), dest + f.name],
+                    capture_output=True, timeout=15
+                )
+                if result.returncode == 0:
+                    pushed += 1
+            logger.info(f"[图库同步] 推送 {pushed}/{len(files)} 张图片到模拟器")
+
+            # 触发媒体扫描
+            subprocess.run(
+                [adb, "-s", cfg.MUMU_ADB_ADDR, "shell",
+                 "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
+                 f"-d file://{dest}"],
+                capture_output=True, timeout=10
+            )
+            time.sleep(2)
+        except Exception as e:
+            logger.warning(f"[图库同步] 失败: {e}（继续运行）")
 
     def run(self):
         self.setup()

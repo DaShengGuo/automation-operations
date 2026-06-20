@@ -375,63 +375,117 @@ class NavigateActions:
 
 
 class CommentActions:
-    """评论操作（发布评论、上传图片、删除评论）"""
+    """评论操作（发布评论、上传图片、删除评论）
 
-    # ── 评论区底部输入栏坐标 ──
-    COMMENT_INPUT_Y = 0.965   # 输入栏纵坐标（紧贴屏幕底部）
-    COMMENT_INPUT_X = 0.35    # 输入框横坐标（输入栏左侧文字区域）
+    坐标说明（两个状态）：
+    ┌─ 键盘未弹出（刚打开评论区）─────────────────────┐
+    │  [输入框 x=0.35]  [🖼图 x=0.78] [@] [😊]  ← y=0.965 │
+    └────────────────────────────────────────────────┘
+    ┌─ 键盘弹出后 ───────────────────────────────────┐
+    │  [🖼图片(左下)]  [输入框(上移)]  [发布(右下)]      │
+    │    x≈0.12          x≈0.50         x≈0.88        │
+    │    y≈0.88           y≈0.88         y≈0.88        │
+    └────────────────────────────────────────────────┘
+    """
+
+    # 键盘未弹出时的坐标
+    INPUT_Y_CLOSED = 0.965
+    INPUT_X_CLOSED = 0.35
+    IMG_BTN_X_CLOSED = 0.78
+
+    # 键盘弹出后的坐标
+    INPUT_Y_OPEN = 0.88
+    IMG_BTN_X_OPEN = 0.12   # 图片按钮在左下
+    SEND_BTN_X_OPEN = 0.88  # 发送按钮在右下
 
     def __init__(self, base: BaseActions):
         self.b = base
+        self._keyboard_open = False
+
+    def _tap_input_field(self):
+        """点击评论输入框（键盘未弹出时）"""
+        self.b._smart_find_and_tap(
+            template=None,
+            desc=None,
+            coord=(self.INPUT_X_CLOSED, self.INPUT_Y_CLOSED),
+        )
+        time.sleep(1.5)  # 等待键盘弹出
+        self._keyboard_open = True
 
     def input_comment_text(self, text: str):
-        """
-        点击评论区底部输入框并输入文字。
-        注意：输入框在屏幕最底部(y≈0.965)，左边是文字输入区(x≈0.35)。
-        不能点太高或太靠右，否则会点到用户头像/评论内容。
-        """
-        # 用智能定位：图像模板兜底 + 坐标
-        self.b._smart_find_and_tap(
-            template=None,  # 评论区输入框变化大，暂不用模板
-            text=None,
-            desc=None,
-            coord=(self.COMMENT_INPUT_X, self.COMMENT_INPUT_Y),
-        )
-        time.sleep(1.0)
+        """点击输入框并输入文字（键盘弹出后坐标改变）"""
+        if not self._keyboard_open:
+            self._tap_input_field()
         self.b.d.send_keys(text)
         self.b._rand_delay(0.5, 1.0)
 
     def add_comment_images(self, image_paths: list[str]) -> bool:
         """
-        点击评论区图片按钮添加图片。
-        图片按钮在输入栏右侧第一个图标(x≈0.78, y≈0.965)。
+        添加评论图片（2张对比图）。
+        键盘弹出后图片按钮在左下角(x≈0.12, y≈0.88)。
+        从相册选图：从上到下连续选2张（对比图成对），不跳过。
         """
-        if not image_paths:
-            return True
-        # 点击图片按钮（输入栏右侧第一个图标）
+        if not image_paths or len(image_paths) < 2:
+            return False
+
+        # 确保键盘已弹出，图片按钮在左下
+        if not self._keyboard_open:
+            self._tap_input_field()
+
+        # 点击左下角图片按钮
         self.b._smart_find_and_tap(
             template=None,
             desc="图片",
-            coord=(0.78, self.COMMENT_INPUT_Y),
+            coord=(self.IMG_BTN_X_OPEN, self.INPUT_Y_OPEN),
             timeout=2.0
         )
         time.sleep(2.0)
-        for _ in image_paths[:2]:
-            self.b._find_and_tap(text="最近", timeout=2.0) or \
-            self.b._find_and_tap(text="图片", timeout=2.0) or \
-            self.b._find_and_tap(text="相册", timeout=2.0) or \
-            self.b._tap_ratio(0.25, 0.35)
-            time.sleep(1.0)
+
+        # ── 从相册选2张连续图片（对比图成对选取） ──
+        # 相册网格：3列，图片按文件名排序（ADB推送的图片在最前面）
+        # 从上到下、从左到右连续选2张
+        self._select_image_pair()
+        time.sleep(1.0)
+
+        # 点击"完成"确认选图
         return self.b._find_and_tap(text="完成", timeout=2.0) or \
                self.b._find_and_tap(text="确定", timeout=2.0) or \
                self.b._find_and_tap(desc="完成", timeout=2.0)
 
+    def _select_image_pair(self):
+        """
+        在相册网格中选择连续2张图片（对比图对）。
+        3列网格布局，按行从上到下选取：
+          第1张：(0.17, 0.25)  第1列
+          第2张：(0.50, 0.25)  第2列（同行的下一张）
+        如果点击后有选中反馈（勾选标记），说明点到了。
+        """
+        # 相册网格坐标（3列布局）
+        COL_X = [0.17, 0.50, 0.83]  # 第1/2/3列横坐标
+        ROW_Y_START = 0.25           # 第一行纵坐标
+        ROW_HEIGHT = 0.30            # 每行高度
+
+        selected = 0
+        row = 0
+        while selected < 2 and row < 10:
+            for col in range(3):
+                if selected >= 2:
+                    break
+                x = COL_X[col]
+                y = ROW_Y_START + row * ROW_HEIGHT
+                self.b._tap_ratio(x, y)
+                time.sleep(0.8)  # 等选中反馈
+                selected += 1
+            row += 1
+
     def submit_comment(self) -> bool:
-        """点击发布/发送按钮"""
+        """
+        点击发布按钮（键盘弹出后在右下角 x≈0.88, y≈0.88）。
+        """
         return self.b._find_and_tap(text="发布", timeout=3.0) or \
                self.b._find_and_tap(text="发送", timeout=3.0) or \
                self.b._find_and_tap(desc="发布", timeout=3.0) or \
-               self.b._tap_ratio(0.88, self.COMMENT_INPUT_Y)
+               self.b._tap_ratio(self.SEND_BTN_X_OPEN, self.INPUT_Y_OPEN)
 
     def verify_comment_published(self) -> bool:
         time.sleep(cfg.POST_VERIFY_WAIT)
