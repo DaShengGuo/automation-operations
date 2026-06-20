@@ -441,36 +441,70 @@ class CommentActions:
         self.b._rand_delay(0.5, 1.0)
 
     def add_comment_images(self, image_paths: list[str]) -> bool:
+        """
+        选2张对比图: 每次只选1张→自动返回→点+号再选第二张。
+        """
         if not image_paths or len(image_paths) < 2:
             return False
-        el = self.b.d(description="插入图片")
+
+        # 第1张: 打开相册→选图→自动返回评论区
+        self._open_and_select_one(0)
+        time.sleep(2.5)
+
+        # 评论区已出现第1张缩略图, 找+号添加第二张
+        self._tap_add_more_button()
+        time.sleep(2.5)
+
+        # 第2张: 再次打开相册→选图→自动返回
+        self._open_and_select_one(1)
+        time.sleep(2.0)
+        return True
+
+    def _open_and_select_one(self, index: int):
+        """打开相册并选择单张图片"""
+        if index == 0:
+            # 首次: 点图片按钮打开相册
+            self.b._tap_ratio(0.06, 0.76)
+        # index>0 时相册已经通过+号打开了
+        time.sleep(2.0)
+        self._select_single_image(index)
+        # 选完后自动返回评论区, 不需要点完成
+
+    def _tap_add_more_button(self):
+        """
+        评论区已有1张图片时, 找+号添加更多。
+        图片缩略图右边的+号, 用content-desc或坐标定位。
+        """
+        # 尝试找描述包含 添加/加 的 ImageView
+        try:
+            el = self.b.d.xpath('//*[contains(@content-desc, "添加") or contains(@content-desc, "加")]')
+            if el.exists:
+                el.click()
+                return
+        except Exception:
+            pass
+        # 尝试找 text=加 的元素
+        el = self.b.d(text="加")
         if el.exists:
             el.click()
-        else:
-            self.b._tap_ratio(0.045, 0.938)
-        self.b._rand_delay()
-        time.sleep(2.0)
-        self._select_image_pair()
-        time.sleep(1.0)
-        el_done = self.b.d(text="完成")
-        if el_done.exists:
-            el_done.click()
-            return True
-        return self.b._find_and_tap(text="确定", timeout=2.0)
+            return
+        # 坐标兜底: 图片缩略图大约在左下区域, +号在其右方
+        self.b._tap_ratio(0.30, 0.88)
 
-    def _select_image_pair(self):
-        COL_X = [0.166, 0.499, 0.833]
-        ROW_Y = [0.248, 0.436, 0.623, 0.811]
-        # 长按第一张进入多选模式
-        self.b.d.long_click(
-            int(self.b.screen_w * 0.499),
-            int(self.b.screen_h * 0.248),
-            duration=0.5
-        )
-        time.sleep(1.2)
-        # 普通点击第二张
-        self.b._tap_ratio(0.833, 0.248)
-        time.sleep(1.2)
+    def _select_single_image(self, index: int):
+        """
+        在相册中选择单张图片。
+        Grid: 3列 center=0.166/0.499/0.833, 行=0.248/0.436/0.623/0.811
+        index 0→第一张(0.499,0.248), index 1→第二张(0.833,0.248)
+        """
+        positions = [
+            (0.499, 0.248),  # 第1张: row0 col1
+            (0.833, 0.248),  # 第2张: row0 col2
+        ]
+        if index < len(positions):
+            x, y = positions[index]
+            self.b._tap_ratio(x, y)
+            time.sleep(1.5)
     def submit_comment(self) -> bool:
         for txt in ["发布", "发送"]:
             el = self.b.d(text=txt)
