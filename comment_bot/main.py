@@ -64,6 +64,11 @@ class CommentBot:
             self.ctrl = DouyinController()
             self._sync_images_to_emulator()
             self.ctrl.open_douyin()
+            time.sleep(3)
+            # 强制回到推荐Tab首页（抖音可能启动到朋友页或其他Tab）
+            self.ctrl.nav.open_recommend_tab()
+            time.sleep(2)
+            logger.info("[导航] 已切换到推荐Tab首页")
         else:
             logger.info("[测试模式] 跳过设备连接")
 
@@ -172,7 +177,12 @@ class CommentBot:
                 video_index += 1
                 video_count_since_rest += 1
 
-                # 4. 定期休息
+                # 4. 每20个视频校准一次：确保还在推荐Tab（防止误触跳转到朋友/消息页）
+                if video_index > 0 and video_index % 20 == 0 and not self.test_mode:
+                    self.ctrl.nav.open_recommend_tab()
+                    time.sleep(1.0)
+
+                # 5. 定期休息
                 if video_count_since_rest >= cfg.REST_EVERY_N_VIDEOS:
                     rest_sec = random.randint(
                         cfg.REST_DURATION_MIN, cfg.REST_DURATION_MAX
