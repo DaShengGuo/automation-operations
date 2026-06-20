@@ -458,7 +458,7 @@ class CommentActions:
         except Exception:
             return True  # 不确定时继续, 不阻塞
     def _open_and_select_one(self, index: int):
-        """打开相册→选图。index=0点图片按钮; index=1点+号。"""
+        """打开相册→选图(点圆圈)→点下一步"""
         if index == 0:
             el = self.b.d(description="插入图片")
             if el.exists:
@@ -466,12 +466,10 @@ class CommentActions:
             else:
                 self.b._tap_ratio(0.045, 0.938)
         else:
-            # 第二张: 必须通过+号打开相册
             self._tap_add_more_button()
         time.sleep(3.0)
         self._select_single_image(index)
-        time.sleep(2.5)
-
+        time.sleep(2.0)
     def _find_right_insert_img(self):
         for e in self.b.d(description="插入图片"):
             try:
@@ -504,18 +502,24 @@ class CommentActions:
 
     def _select_single_image(self, index: int):
         """
-        在相册中选择单张图片。
-        Grid: 3列 center=0.166/0.499/0.833, 行=0.248/0.436/0.623/0.811
-        index 0→第一张(0.499,0.248), index 1→第二张(0.833,0.248)
+        在相册中选择图片(点右上角圆圈而非图本身)。
+        网格: 3列, 第1个是拍照(跳过)。
+        第1张实际图: 圆圈在 col1 右上 ≈(0.55,0.20)
+        第2张实际图: 圆圈在 col2 右上 ≈(0.88,0.20)
         """
-        positions = [
-            (0.499, 0.248),  # 第1张: row0 col1
-            (0.833, 0.248),  # 第2张: row0 col2
+        circles = [
+            (0.55, 0.20),  # 第1张实际图(col1) 右上角圆圈
+            (0.88, 0.20),  # 第2张实际图(col2) 右上角圆圈
         ]
-        if index < len(positions):
-            x, y = positions[index]
+        if index < len(circles):
+            x, y = circles[index]
             self.b._tap_ratio(x, y)
             time.sleep(1.5)
+            # 点"下一步"
+            el_next = self.b.d(text="下一步")
+            if el_next.exists:
+                el_next.click()
+                time.sleep(1.5)
     def submit_comment(self) -> bool:
         for txt in ["发布", "发送"]:
             el = self.b.d(text=txt)
