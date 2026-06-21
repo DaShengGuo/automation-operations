@@ -11,7 +11,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEST = "/sdcard/Pictures/douyin_bot/"
+DEST = "/sdcard/DCIM/douyin_bot/"
 
 
 def sync_images_to_emulator(adb_path: str, device_addr: str, images_dir: str) -> int:
