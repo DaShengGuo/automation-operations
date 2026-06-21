@@ -108,7 +108,7 @@ DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 5800
 
 # ── AI 视频筛选 ──
-AI_ENABLED = True
+AI_ENABLED = True  # 启用 AI 筛选
 AI_MODE = "hybrid"  # "keyword_only" | "ai_only" | "hybrid"
 AI_USE_BLIP = False  # BLIP 标注(额外~500MB VRAM)
 AI_USE_LLM = True    # LLM 最终决策

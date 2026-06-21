@@ -94,7 +94,7 @@ class CommentBot:
     def _sync_images_to_emulator(self):
         """
         启动时通过 ADB 将对比图推送到模拟器相册。
-        推送到 /sdcard/DCIM/douyin_bot/ → 触发媒体扫描 → 相册中可见。
+        用 adb push 批量推送目录（比逐文件快）。
         """
         import subprocess
         images_dir = cfg.MATERIALS_DIR / "images"
@@ -106,19 +106,18 @@ class CommentBot:
         adb = cfg.ADB_EXECUTABLE
 
         try:
-            subprocess.run([adb, "-s", cfg.MUMU_ADB_ADDR, "shell",
-                           f"mkdir -p {dest}"],
-                          capture_output=True, timeout=10)
-            files = list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png"))
-            pushed = 0
-            for f in files:
-                result = subprocess.run(
-                    [adb, "-s", cfg.MUMU_ADB_ADDR, "push", str(f), dest + f.name],
-                    capture_output=True, timeout=15
-                )
-                if result.returncode == 0:
-                    pushed += 1
-            logger.info(f"[图库同步] 推送 {pushed}/{len(files)} 张图片到模拟器")
+            # 创建目标目录
+            subprocess.run(
+                [adb, "-s", cfg.MUMU_ADB_ADDR, "shell", f"mkdir -p {dest}"],
+                capture_output=True, timeout=10
+            )
+            # 批量推送整个目录（比逐文件快10倍）
+            result = subprocess.run(
+                [adb, "-s", cfg.MUMU_ADB_ADDR, "push", str(images_dir) + "/.", dest],
+                capture_output=True, text=True, timeout=60
+            )
+            count = result.stdout.count(".jpg") + result.stdout.count(".png")
+            logger.info(f"[图库同步] 推送 ~{count} 张图片到模拟器")
 
             # 触发媒体扫描
             subprocess.run(
@@ -128,6 +127,8 @@ class CommentBot:
                 capture_output=True, timeout=10
             )
             time.sleep(2)
+        except FileNotFoundError:
+            logger.warning(f"[图库同步] ADB 未找到: {adb}")
         except Exception as e:
             logger.warning(f"[图库同步] 失败: {e}（继续运行）")
 
@@ -200,36 +201,29 @@ class CommentBot:
 
     def _scan_video(self):
         """
-        刷视频主流程：轻滑 → 等加载 → 截图OCR → 目标则评论 → 非目标继续。
-        每3个视频才截图OCR一次，减少计算开销和操作频率。
+        刷视频主流程：滑 → 截图OCR → 筛选 → 目标则评论。
+        每个视频都检查（不再跳帧）。
         """
-        # 轻滑到下一个视频（swipe内部已含等待）
         self.ctrl.nav.swipe_next_video()
-
-        # 每3个视频才做一次内容分析（减少OCR负担和异常操作）
-        if self._video_scanned_count % 3 != 0:
-            self._video_scanned_count += 1
-            return
         self._video_scanned_count += 1
 
-        # 等视频完全加载
         time.sleep(random.uniform(1.0, 2.0))
 
-        # 检查验证码
         if self.ctrl.check_captcha():
-            logger.warning("[验证码] 检测到验证码，暂停等待手动处理")
+            logger.warning("[验证码] 检测到验证码，暂停")
             self.interrupt.pause()
             return
 
-        # 截图 + OCR
+        # 截图 + 筛选
         ss = self.ctrl.base.screenshot(f"video_scan_{int(time.time())}")
         result = self.filter.check_content(ss)
 
         if result != FilterResult.PASS:
-            return  # 非目标，等下次swipe
+            logger.debug(f"[筛选] #{self._video_scanned_count} {result.name}")
+            return
 
         # ── 目标视频 ──
-        logger.info(f"[目标视频] 发现相关内容，打开评论区...")
+        logger.info(f"[目标] #{self._video_scanned_count} 发现相关内容")
         if not self.ctrl.nav.open_comments():
             return
 
@@ -244,7 +238,6 @@ class CommentBot:
             if self.filter.should_comment(score) == FilterResult.PASS:
                 self._create_comment_task(ss)
 
-        # 关闭评论区，恢复刷视频
         self.ctrl.nav.close_comments()
         self.ctrl.comment.reset_keyboard_state()
 
