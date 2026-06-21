@@ -11,7 +11,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("filter_test")
 
-sys.path.insert(0, 'c:/temp/douyin-framework')
+import os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from douyin_core.adb_controller import DouyinController
 from douyin_core.ocr_engine import crop_and_ocr, parse_comment_time
 from comment_bot.filter import VideoFilter, FilterResult
