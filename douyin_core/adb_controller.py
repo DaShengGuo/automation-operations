@@ -516,10 +516,19 @@ class CommentActions:
             self.b._tap_ratio(x, y)
             time.sleep(1.5)
             # 点"下一步"
-            el_next = self.b.d(text="下一步")
-            if el_next.exists:
-                el_next.click()
+            found = False
+            for txt in ["下一步", "下一步(1)", "下一步(2)"]:
+                el_next = self.b.d(text=txt)
+                if el_next.exists:
+                    el_next.click()
+                    time.sleep(1.5)
+                    found = True
+                    break
+            if not found:
+                # 坐标兜底: 底部红色按钮
+                self.b._tap_ratio(0.50, 0.96)
                 time.sleep(1.5)
+
     def submit_comment(self) -> bool:
         for txt in ["发布", "发送"]:
             el = self.b.d(text=txt)
@@ -527,9 +536,11 @@ class CommentActions:
                 el.click()
                 self.b._rand_delay()
                 return True
-        self.b._tap_ratio(0.88, 0.94)
+        # 坐标兜底: 右下红色发送按钮
+        self.b._tap_ratio(0.94, 0.97)
         self.b._rand_delay()
         return True
+
     def verify_comment_published(self) -> bool:
         time.sleep(cfg.POST_VERIFY_WAIT)
         xml = self.b.dump_hierarchy()

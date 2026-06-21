@@ -61,9 +61,9 @@ for loop in range(1, 6):
     ctrl.comment.submit_comment()
     time.sleep(2)
 
-    # ── Step 5: 等15秒验证 ──
-    step("Step 5: 等15秒 → 验证是否发布成功")
-    time.sleep(15)
+    # ── Step 5: 等2秒验证 ──
+    step("Step 5: 等2秒 → 验证是否发布成功")
+    time.sleep(2)
     verified = ctrl.comment.verify_comment_published()
     if verified:
         logger.info("  >>> 发布成功！<<<")

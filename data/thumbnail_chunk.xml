@@ -1,0 +1,7 @@
+eme:id/erc" class="android.widget.EditText" package="com.ss.android.ugc.aweme" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" visible-to-user="true" bounds="[25,1836][740,1906]" drawing-order="4" hint="有什么想法，展开说说" display-id="0" />
+
+                              <node index="1" text="" resource-id="com.ss.android.ugc.aweme:id/iv_image" class="android.widget.ImageView" package="com.ss.android.ugc.aweme" content-desc="插入图片" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" visible-to-user="true" bounds="[744,1836][814,1906]" drawing-order="5" hint="" display-id="0" />
+
+                              <node index="2" text="" resource-id="com.ss.android.ugc.aweme:id/bgl" class="android.widget.ImageView" package="com.ss.android.ugc.aweme" content-desc="at" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" visible-to-user="true" bounds="[814,1836][884,1906]" drawing-order="6" hint="" display-id="0" />
+
+                              <node index="3" text="" resource-id="com.ss.android.ugc.aweme:id/nx0" class="android.widget.ImageView" package="com.ss.android.ugc.aweme" content-desc="表情" checkable="fa

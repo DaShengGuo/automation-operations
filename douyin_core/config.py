@@ -42,7 +42,7 @@ LIKE_WAIT_SEC = 300
 REPLY_WAIT_SEC = 900
 DM_DELAY_SEC = 60
 POST_RETRY_COUNT = 3
-POST_VERIFY_WAIT = 3
+POST_VERIFY_WAIT = 2
 DELETE_GRACE_SEC = 10
 
 # ── 视频筛选 ──
@@ -106,6 +106,22 @@ MANUAL_INTERVENTION_KEYWORDS = [
 # ── Dashboard ──
 DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 5800
+
+# ── AI 视频筛选 ──
+AI_ENABLED = True
+AI_MODE = "hybrid"  # "keyword_only" | "ai_only" | "hybrid"
+AI_USE_BLIP = False  # BLIP 标注(额外~500MB VRAM)
+AI_USE_LLM = True    # LLM 最终决策
+AI_LLM_MODEL_PATH = str(DATA_DIR / "models" / "qwen2.5-1.5b-instruct-q4_k_m.gguf")
+AI_BGE_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
+AI_CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+AI_QDRANT_PATH = str(DATA_DIR / "qdrant_data")
+AI_QDRANT_USE_IN_MEMORY = True
+AI_SEED_PATH = str(PROJECT_ROOT / "seeds" / "qdrant_seed.json")
+AI_CONFIDENCE_THRESHOLD = 0.6  # 低于此值触发 LLM
+AI_SIMILARITY_EXCLUDE_THRESHOLD = 0.5  # 高于此值跳过
+AI_FALLBACK_TO_KEYWORD = True
+AI_SAMPLE_EVERY_N = 1  # AI 每 N 个关键词通过运行一次
 
 # ── 日志 ──
 LOG_LEVEL = "INFO"
