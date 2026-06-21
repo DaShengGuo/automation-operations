@@ -30,3 +30,10 @@ Thumbs.db
 data/screenshots/*.png
 data/logs/*.log
 data/state.db
+data/models/
+douyin-framework/
+
+# Large media files (not project code)
+*.mp4
+*.avi
+Snipaste_*.png
