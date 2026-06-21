@@ -92,43 +92,13 @@ class CommentBot:
         logger.info("[系统] 初始化完成，开始运行（Ctrl+C 停止）")
 
     def _sync_images_to_emulator(self):
-        """
-        启动时通过 ADB 将对比图推送到模拟器相册。
-        用 adb push 批量推送目录（比逐文件快）。
-        """
-        import subprocess
-        images_dir = cfg.MATERIALS_DIR / "images"
-        if not images_dir.exists():
-            logger.warning("[图库同步] images 目录不存在，跳过")
-            return
-
-        dest = "/sdcard/DCIM/douyin_bot/"
-        adb = cfg.ADB_EXECUTABLE
-
+        """启动时推送图片到模拟器相册"""
         try:
-            # 创建目标目录
-            subprocess.run(
-                [adb, "-s", cfg.MUMU_ADB_ADDR, "shell", f"mkdir -p {dest}"],
-                capture_output=True, timeout=10
+            from douyin_core.image_sync import sync_images_to_emulator
+            sync_images_to_emulator(
+                cfg.ADB_EXECUTABLE, cfg.MUMU_ADB_ADDR,
+                str(cfg.MATERIALS_DIR / "images")
             )
-            # 批量推送整个目录（比逐文件快10倍）
-            result = subprocess.run(
-                [adb, "-s", cfg.MUMU_ADB_ADDR, "push", str(images_dir) + "/.", dest],
-                capture_output=True, text=True, timeout=60
-            )
-            count = result.stdout.count(".jpg") + result.stdout.count(".png")
-            logger.info(f"[图库同步] 推送 ~{count} 张图片到模拟器")
-
-            # 触发媒体扫描
-            subprocess.run(
-                [adb, "-s", cfg.MUMU_ADB_ADDR, "shell",
-                 "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
-                 f"-d file://{dest}"],
-                capture_output=True, timeout=10
-            )
-            time.sleep(2)
-        except FileNotFoundError:
-            logger.warning(f"[图库同步] ADB 未找到: {adb}")
         except Exception as e:
             logger.warning(f"[图库同步] 失败: {e}（继续运行）")
 

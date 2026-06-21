@@ -25,26 +25,11 @@ ctrl = DouyinController()
 mm = MaterialManager()
 
 # ── 推送图片到模拟器 ──
-import subprocess
-logger.info("推送图片到模拟器...")
-dest = "/sdcard/DCIM/douyin_bot/"
-result = subprocess.run(
-    [cfg.ADB_EXECUTABLE, "-s", cfg.MUMU_ADB_ADDR, "shell", f"mkdir -p {dest}"],
-    capture_output=True, timeout=10
+from douyin_core.image_sync import sync_images_to_emulator
+sync_images_to_emulator(
+    cfg.ADB_EXECUTABLE, cfg.MUMU_ADB_ADDR,
+    str(cfg.MATERIALS_DIR / "images")
 )
-result = subprocess.run(
-    [cfg.ADB_EXECUTABLE, "-s", cfg.MUMU_ADB_ADDR, "push",
-     str(cfg.MATERIALS_DIR / "images") + "/.", dest],
-    capture_output=True, text=True, timeout=60
-)
-count = result.stdout.count(".jpg") + result.stdout.count(".png")
-subprocess.run(
-    [cfg.ADB_EXECUTABLE, "-s", cfg.MUMU_ADB_ADDR, "shell",
-     "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://" + dest],
-    capture_output=True, timeout=10
-)
-logger.info(f"推送完成 ~{count} 张图片")
-time.sleep(2)
 
 def step(name):
     logger.info(f"{'='*40}")
