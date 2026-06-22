@@ -78,10 +78,23 @@ for loop in range(1, 6):
         if D(text=t).exists: D(text=t).click(); break
     time.sleep(3)
 
-    # Step5: 点+号 (rid=iv_image, 坐标0.69,0.95)
-    logger.info("Step5: 点+号")
-    if not find_and_click("iv_image"):
-        ctrl.base._tap_ratio(0.69, 0.95)
+    # Step5: 点+号 — 缩略图在左(x≈0.02-0.15), +号紧挨右边, y和缩略图同高
+    logger.info("Step5: 点+号(缩略图正右)")
+    # 缩略图大约在输入框区域 y≈0.90-0.95
+    for px, py in [(0.18, 0.93), (0.16, 0.93), (0.20, 0.93),
+                    (0.18, 0.91), (0.16, 0.91), (0.14, 0.93)]:
+        ctrl.base._tap_ratio(px, py)
+        time.sleep(2)
+        # 检查是否打开了相册
+        try:
+            xml = ctrl.base.dump_hierarchy()
+            if '拍照' in xml or '所有照片' in xml:
+                logger.info(f"+号命中: ({px}, {py})")
+                break
+        except: pass
+    else:
+        logger.error("所有+号位置都失败!")
+        continue
     time.sleep(3)
 
     # Step6: 选第2张图 (col2=0.83, row≈0.28 右上角圆圈)
