@@ -1,6 +1,6 @@
 """
-真机筛选 — Redmi 14C (720×1640)
-先看评论区数量(爆款), 再看新鲜度(最近评论), 达标→启动评论模块
+真机筛选 — Redmi 14C
+点评论区 → 确认打开 → 读评论时间 → 新鲜就标记
 """
 import sys, time, random, logging, os, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,109 +11,68 @@ from douyin_core.adb_controller import DouyinController
 from douyin_core.ocr_engine import crop_and_ocr, parse_comment_time
 
 ctrl = DouyinController('AQV4TSDY9PCEIZ8L')
-FRESHNESS_THRESHOLD = 0.3
+COMMENT_BTN = (0.931, 0.378)
+TIME_REGION = (0.50, 0.25, 0.95, 0.90)  # 扩大OCR区域
+FRESHNESS = 0.3
 
-# ── 真机坐标 (720×1640) ──
-COMMENT_BTN       = (0.931, 0.378)
-COMMENT_TIME_REGION = (0.60, 0.25, 0.95, 0.85)
+def swipe():
+    ctrl.d.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
+    time.sleep(random.uniform(1.5, 2.5))
 
-def parse_wan(s):
-    """解析'3.3万' '588' '1.2万' → int"""
-    s = s.strip().replace(',', '')
-    if '万' in s:
-        return int(float(s.replace('万', '')) * 10000)
-    try: return int(s)
-    except: return 0
-
-def get_comment_count(xml):
-    """从hierarchy提取评论数"""
-    m = re.search(r'评论(\d+\.?\d*万?)', xml)
-    if m: return parse_wan(m.group(1))
-    # 尝试text
-    for m in re.finditer(r'text="(\d+\.?\d*万?)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
-        x1 = int(m.group(2))
-        if x1 > 550:  # 右侧
-            return parse_wan(m.group(1))
-    return 0
-
-logger.info("真机筛选 — 爆款优先, Ctrl+C 停止")
-logger.info("=" * 50)
-
-stats = {"pass": 0, "skip": 0, "live": 0, "total": 0}
+logger.info("真机筛选 Ctrl+C 停止")
+stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
 
 try:
     while True:
-        # 先不滑动 — 看当前视频数据
-        time.sleep(1)
+        swipe()
         stats["total"] += 1
 
-        # 截图 + Dump hierarchy
-        ss = ctrl.base.screenshot(f"filter_real_{int(time.time())}")
-        xml = ctrl.base.dump_hierarchy()
-
-        # 检测直播
-        if '直播' in xml:
-            stats["live"] += 1
-            # 滑走
-            ctrl.d.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
-            time.sleep(random.uniform(1.5, 2.5))
-            continue
-
-        # 获取评论数 (hierarchy优先, OCR兜底)
-        cc = get_comment_count(xml)
-        if cc == 0:
-            # hierarchy可能没抓到, OCR右侧评论区数字
-            try:
-                right_texts = crop_and_ocr(ss, (0.85, 0.55, 1.0, 0.70))
-                for t in right_texts:
-                    m = re.search(r'(\d+\.?\d*万?)', t)
-                    if m: cc = parse_wan(m.group(1)); break
-            except: pass
-        if cc < 500:  # 低于500条跳过
-            stats["skip"] += 1
-            ctrl.d.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
-            time.sleep(random.uniform(1.5, 2.5))
-            continue
-
-        logger.info(f"  #{stats['total']} 评论数:{cc} → 检查新鲜度...")
-
-        # 打开评论区, OCR时间戳
         ctrl.base._tap_ratio(*COMMENT_BTN)
         time.sleep(2)
-        css = ctrl.base.screenshot(f"comments_real_{int(time.time())}")
-        time_texts = crop_and_ocr(css, COMMENT_TIME_REGION)
-        times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
 
-        if not times:
+        css = ctrl.base.screenshot(f"c_{int(time.time())}")
+
+        # 确认评论区打开了: OCR找"回复"或"评论"
+        check = crop_and_ocr(css, (0.05, 0.20, 0.40, 0.50))
+        check_text = ' '.join(check)
+        has_comments = any(kw in check_text for kw in ['回复', '评论', '展开', '条回复'])
+
+        if not has_comments:
+            stats["nocomment"] += 1
             ctrl.base.d.press('back')
-            time.sleep(1)
-            ctrl.d.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
-            time.sleep(random.uniform(1.5, 2.5))
+            time.sleep(0.5)
             continue
 
-        fresh5 = sum(1 for t in times if t <= 5)
-        fresh15 = sum(1 for t in times if t <= 15)
+        # 评论区已打开, 读时间戳
+        time_texts = crop_and_ocr(css, TIME_REGION)
+        times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
         total = len(times)
-        score = (fresh5/total)*0.6 + (fresh15/total)*0.4
+
+        # 也检查是否有"刚刚"文字(高新鲜度信号)
+        has_just_now = any('刚刚' in t or '秒前' in t for t in time_texts)
+
+        if total == 0 and not has_just_now:
+            # OCR没读到时间, 但不代表不新鲜, 保守算过
+            stats["pass"] += 1
+            logger.info(f"  #{stats['total']} ✅ 有评论(OCR未读到时间)")
+        else:
+            fresh5 = sum(1 for t in times if t <= 5)
+            fresh15 = sum(1 for t in times if t <= 15)
+            score = (fresh5/max(total,1))*0.6 + (fresh15/max(total,1))*0.4
+
+            if score >= FRESHNESS or has_just_now:
+                stats["pass"] += 1
+                logger.info(f"  #{stats['total']} ✅ {total}条 5min:{fresh5} 15min:{fresh15} 评分:{score:.2f}")
+            else:
+                stats["stale"] += 1
 
         ctrl.base.d.press('back')
-        time.sleep(1)
-
-        if score >= FRESHNESS_THRESHOLD:
-            stats["pass"] += 1
-            logger.info(f"    ✅ PASS | 评论:{total}条 5min内:{fresh5} 15min内:{fresh15} 评分:{score:.2f}")
-        else:
-            stats["skip"] += 1
-            logger.info(f"    ⏭ 新鲜度不足 评分:{score:.2f}")
-
-        # 滑下一个
-        ctrl.d.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
-        time.sleep(random.uniform(1.5, 2.5))
+        time.sleep(0.5)
 
         if stats["total"] % 10 == 0:
             t = stats["total"]
-            logger.info(f"--- [{t}] PASS={stats['pass']} 跳过={stats['skip']} 直播={stats['live']}")
+            logger.info(f"--- [{t}] PASS={stats['pass']} 无评论={stats['nocomment']} 不新鲜={stats['stale']}")
 
 except KeyboardInterrupt:
     t = max(stats["total"], 1)
-    logger.info(f"\n最终: [{t}] PASS={stats['pass']}({stats['pass']*100//t}%) 跳过={stats['skip']} 直播={stats['live']}")
+    logger.info(f"\n最终 [{t}]: PASS={stats['pass']} 无评论={stats['nocomment']} 不新鲜={stats['stale']}")
