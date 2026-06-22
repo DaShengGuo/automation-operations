@@ -69,26 +69,39 @@ for loop in range(1, 6):
         ctrl.base._tap_ratio(0.089, 0.904)
     time.sleep(3)
 
-    # Step4: 选第1张图 (col1=0.50, row≈0.28 右上角圆圈 +0.08,-0.05)
+    # Step4: 选第1张图 + 下一步
     logger.info("Step4: 选第1张图+下一步")
-    ctrl.base._tap_ratio(0.58, 0.23)  # 第一张图右上角圆圈
-    time.sleep(1.5)
-    for t in ["下一步", "下一步(1)", "下一步(2)"]:
-        if D(text=t).exists: D(text=t).click(); break
-    time.sleep(3)
-
-    # Step5: 点+号 — 视觉分析: 缩略图正右, (0.55, 0.78)
-    logger.info("Step5: 点+号(0.55, 0.78)")
+    ctrl.base._tap_ratio(0.58, 0.23)
     time.sleep(2)
-    ctrl.base._tap_ratio(0.55, 0.78)
+    # 下一步按钮(底部红色), 文字含"下一步"和数字
+    for t in ["下一步", "下一步(1)", "下一步(2)", "下一步(3)"]:
+        el = D(text=t)
+        if el.exists: el.click(); logger.info(f"点击{t}"); break
+    else:
+        # 尝试textContains
+        try:
+            el = D(textContains="下一步")
+            if el.exists: el.click(); logger.info("点击textContains下一步")
+        except: pass
     time.sleep(3)
 
-    # Step6: 选第2张图 (col2=0.83, row≈0.28 右上角圆圈)
-    logger.info("Step6: 选第2张图+下一步")
-    ctrl.base._tap_ratio(0.91, 0.23)  # 第二张图右上角圆圈
-    time.sleep(1.5)
-    for t in ["下一步", "下一步(1)", "下一步(2)"]:
-        if D(text=t).exists: D(text=t).click(); break
+    # Step5: 点+号 — 确认坐标 (0.30, 0.76)
+    logger.info("Step5: 点+号(0.30, 0.76)")
+    ctrl.base._tap_ratio(0.30, 0.76)
+    time.sleep(3)
+
+    # Step6: 选第2张图 + 下一步
+    logger.info("Step6: 选第2张图+下一步(2)")
+    ctrl.base._tap_ratio(0.91, 0.23)
+    time.sleep(2)
+    for t in ["下一步", "下一步(1)", "下一步(2)", "下一步(3)"]:
+        el = D(text=t)
+        if el.exists: el.click(); logger.info(f"点击{t}"); break
+    else:
+        try:
+            el = D(textContains="下一步")
+            if el.exists: el.click(); logger.info("点击textContains下一步")
+        except: pass
     time.sleep(3)
 
     # Step7: 点发送
