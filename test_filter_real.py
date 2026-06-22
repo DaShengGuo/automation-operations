@@ -30,10 +30,12 @@ def do_publish():
     """发布(已确认流程)"""
     try:
         open_comments(); time.sleep(2)
-        cw = mm.pick_copywriting()
+        cw1 = mm.pick_copywriting()
+        cw2 = mm.pick_copywriting()
+        text = cw1['content'] + '\n' + cw2['content']
         el = D(className='android.widget.EditText')
         if el.exists: el.click()
-        time.sleep(1); D.send_keys(cw['content']); time.sleep(2)
+        time.sleep(1); D.send_keys(text); time.sleep(2)
         for desc in ["插入图片","图片"]:
             el = D(description=desc)
             if el.exists: el.click(); break
@@ -80,8 +82,8 @@ try:
 
         open_comments(); time.sleep(2)
 
-        # 滚动评论区3次
-        for _ in range(3):
+        # 滚动评论区6次
+        for _ in range(6):
             D.swipe(360, int(1640*0.75), 360, int(1640*0.45), duration=0.3)
             time.sleep(0.8)
 
