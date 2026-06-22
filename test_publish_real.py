@@ -60,14 +60,13 @@ for loop in range(1, 6):
     D.send_keys(cw['content'])
     time.sleep(2)
 
-    # Step3: 点图片按钮 (desc=插入图片, 无rid, 坐标0.09,0.90)
+    # Step3: 点图片按钮 ([20,1439][108,1527] center=0.089,0.904)
     logger.info("Step3: 点图片按钮")
-    found = False
     for desc in ["插入图片", "图片"]:
         el = D(description=desc)
-        if el.exists: el.click(); found = True; break
-    if not found:
-        ctrl.base._tap_ratio(0.09, 0.90)  # 真机dump坐标
+        if el.exists: el.click(); break
+    else:
+        ctrl.base._tap_ratio(0.089, 0.904)
     time.sleep(3)
 
     # Step4: 选第1张图 (col1=0.50, row≈0.28 右上角圆圈 +0.08,-0.05)
@@ -78,23 +77,11 @@ for loop in range(1, 6):
         if D(text=t).exists: D(text=t).click(); break
     time.sleep(3)
 
-    # Step5: 点+号 — 缩略图在左(x≈0.02-0.15), +号紧挨右边, y和缩略图同高
-    logger.info("Step5: 点+号(缩略图正右)")
-    # 缩略图大约在输入框区域 y≈0.90-0.95
-    for px, py in [(0.18, 0.93), (0.16, 0.93), (0.20, 0.93),
-                    (0.18, 0.91), (0.16, 0.91), (0.14, 0.93)]:
-        ctrl.base._tap_ratio(px, py)
-        time.sleep(2)
-        # 检查是否打开了相册
-        try:
-            xml = ctrl.base.dump_hierarchy()
-            if '拍照' in xml or '所有照片' in xml:
-                logger.info(f"+号命中: ({px}, {py})")
-                break
-        except: pass
-    else:
-        logger.error("所有+号位置都失败!")
-        continue
+    # Step5: 点+号 — dump确认: iv_image at [336,1512][416,1592] center=(0.522,0.946)
+    logger.info("Step5: 点+号(iv_image)")
+    el = D(resourceId="com.ss.android.ugc.aweme:id/iv_image")
+    if el.exists: el.click()
+    else: ctrl.base._tap_ratio(0.522, 0.946)
     time.sleep(3)
 
     # Step6: 选第2张图 (col2=0.83, row≈0.28 右上角圆圈)
