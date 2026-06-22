@@ -13,7 +13,7 @@ from comment_bot.materials import MaterialManager
 ctrl = DouyinController('AQV4TSDY9PCEIZ8L')
 D = ctrl.d
 mm = MaterialManager()
-TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|刚刚|\d+秒前)')
+TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|半小时前|刚刚|\d+秒前)')
 
 def swipe():
     D.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)

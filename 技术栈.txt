@@ -28,3 +28,5 @@ Embedding：BGE-M3
 部署：Docker Compose
 
 python test_publish.py 发布功能
+
+hierarchy不是从代码元素直接提取评论吗,跟滑动查看哪个效率高
