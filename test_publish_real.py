@@ -77,11 +77,10 @@ for loop in range(1, 6):
         if D(text=t).exists: D(text=t).click(); break
     time.sleep(3)
 
-    # Step5: 点+号 — dump确认: iv_image at [336,1512][416,1592] center=(0.522,0.946)
-    logger.info("Step5: 点+号(iv_image)")
-    el = D(resourceId="com.ss.android.ugc.aweme:id/iv_image")
-    if el.exists: el.click()
-    else: ctrl.base._tap_ratio(0.522, 0.946)
+    # Step5: 点+号 — 视觉分析: 缩略图正右, (0.55, 0.78)
+    logger.info("Step5: 点+号(0.55, 0.78)")
+    time.sleep(2)
+    ctrl.base._tap_ratio(0.55, 0.78)
     time.sleep(3)
 
     # Step6: 选第2张图 (col2=0.83, row≈0.28 右上角圆圈)
