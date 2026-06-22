@@ -80,12 +80,24 @@ try:
 
         open_comments(); time.sleep(2)
 
-        # 滚动评论区3次, 加载更多评论时间
+        # 滚动评论区3次
         for _ in range(3):
             D.swipe(360, int(1640*0.75), 360, int(1640*0.45), duration=0.3)
             time.sleep(0.8)
 
         xml = D.dump_hierarchy()
+
+        # 健康检查: hierarchy太短说明服务断了, 重启
+        if len(xml) < 30000:
+            logger.warning(f"hierarchy异常({len(xml)}chars), 重启u2服务...")
+            try: D.press('back')
+            except: pass
+            try:
+                import uiautomator2 as u2
+                u2.connect('AQV4TSDY9PCEIZ8L').reset_uiautomator()
+                time.sleep(3)
+            except: pass
+            continue
 
         if '回复' not in xml:
             stats["nocomment"] += 1
@@ -105,6 +117,7 @@ try:
             do_publish()
         else:
             stats["stale"] += 1
+            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过")
             D.press('back')
         time.sleep(0.5)
 
