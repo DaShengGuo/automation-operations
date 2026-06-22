@@ -460,7 +460,7 @@ class CommentActions:
     def _open_and_select_one(self, index: int):
         """打开相册→选图(点圆圈)→点下一步"""
         if index == 0:
-            el = self.b.d(description="插入图片")
+            el = self.b.d(description=self._img_btn_desc)
             if el.exists:
                 el.click()
             else:
@@ -470,8 +470,19 @@ class CommentActions:
         time.sleep(3.0)
         self._select_single_image(index)
         time.sleep(2.0)
+    @property
+    def _img_btn_desc(self):
+        """图片按钮在不同版本Douyin上的desc不同: 插入图片 / 图片"""
+        if not hasattr(self, '_cached_img_desc'):
+            for d in ["插入图片", "图片"]:
+                if self.b.d(description=d).exists:
+                    self._cached_img_desc = d
+                    return d
+            self._cached_img_desc = "插入图片"  # fallback
+        return self._cached_img_desc
+
     def _find_right_insert_img(self):
-        for e in self.b.d(description="插入图片"):
+        for e in self.b.d(description=self._img_btn_desc):
             try:
                 b = e.info.get('bounds', {})
                 if b.get('left', 0) > 500:
@@ -480,8 +491,19 @@ class CommentActions:
                 continue
         return None
 
+    @property
+    def _img_btn_desc(self):
+        """图片按钮在不同版本Douyin上的desc不同: 插入图片 / 图片"""
+        if not hasattr(self, '_cached_img_desc'):
+            for d in ["插入图片", "图片"]:
+                if self.b.d(description=d).exists:
+                    self._cached_img_desc = d
+                    return d
+            self._cached_img_desc = "插入图片"  # fallback
+        return self._cached_img_desc
+
     def _find_right_insert_img(self):
-        for e in self.b.d(description="插入图片"):
+        for e in self.b.d(description=self._img_btn_desc):
             try:
                 b = e.info.get('bounds', {})
                 if b.get('left', 0) > 500:
@@ -491,14 +513,22 @@ class CommentActions:
         return None
 
     def _tap_add_more_button(self):
-        """
-        已选1张图后点+号。
-        视觉分析实际截图: 图片缩略图在左下(x=0~0.15, y=0.80~0.87),
-        +号紧挨右边(x=0.20, y=0.83), 白底黑+方块。
-        """
-        self.b._tap_ratio(0.20, 0.83)
-        time.sleep(2.0)
-        return True
+        """已选1张图后点+号。真机desc=图片, 模拟器desc=插入图片。"""
+        els = list(self.b.d(description=self._img_btn_desc))
+        for e in els:
+            try:
+                b = e.info.get('bounds', {})
+                if b.get('top', 0) > 1400:  # 底部那个(真机y>1400, 模拟器y>1700)
+                    e.click()
+                    time.sleep(1.5)
+                    return True
+            except Exception:
+                continue
+        if els:
+            els[-1].click()
+            time.sleep(1.5)
+            return True
+        return False
 
     def _select_single_image(self, index: int):
         """

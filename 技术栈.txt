@@ -26,3 +26,5 @@ Embedding：BGE-M3
 任务队列：Celery + Redis
 报表：pandas + ECharts
 部署：Docker Compose
+
+python test_publish.py 发布功能
