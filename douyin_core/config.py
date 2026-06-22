@@ -52,7 +52,7 @@ FRESHNESS_THRESHOLD = 0.3
 # 排除关键词 — 命中任一则跳过（病种/医疗/违规相关）
 VIDEO_EXCLUDE_KEYWORDS = [
     # 病种名称
-    "白癜风", "银屑病", "牛皮癣", "红斑狼疮", "硬皮病",
+    "白癜风", "牛皮癣", "红斑狼疮", "硬皮病",
     "皮肤病", "皮炎", "湿疹", "荨麻疹", "鱼鳞病",
     # 医疗相关
     "皮肤科", "皮肤科医生", "皮肤医院", "皮肤病医院",
@@ -83,6 +83,8 @@ VIDEO_TARGET_KEYWORDS = [
     "皮肤问题", "皮肤困扰", "皮肤瑕疵", "皮肤差",
     "不敢露", "遮遮掩掩", "被歧视", "被孤立",
     "自卑", "自信", "抬不起头", "不敢出门",
+    # 扩展目标
+    "银屑病", "美容", "斑点",
 ]
 
 # ── 风控参数 ──
@@ -108,7 +110,7 @@ DASHBOARD_HOST = "127.0.0.1"
 DASHBOARD_PORT = 5800
 
 # ── AI 视频筛选 ──
-AI_ENABLED = True  # 启用 AI 筛选
+AI_ENABLED = False  # 模型下载卡住, 先用关键词
 AI_MODE = "hybrid"  # "keyword_only" | "ai_only" | "hybrid"
 AI_USE_BLIP = False  # BLIP 标注(额外~500MB VRAM)
 AI_USE_LLM = True    # LLM 最终决策
