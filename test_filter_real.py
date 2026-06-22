@@ -109,6 +109,7 @@ try:
         # 提取时间, 统计30分钟内的
         time_texts = TIME_RE.findall(xml)
         times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
+        logger.info(f"  时间样本: {time_texts[:10]} -> {times[:10]}")
         recent = [t for t in times if t <= 30]
         has_now = any('刚刚' in t or '秒前' in t for t in time_texts)
 
@@ -119,7 +120,7 @@ try:
             do_publish()
         else:
             stats["stale"] += 1
-            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过")
+            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过 样本:{time_texts[:5]}")
             D.press('back')
         time.sleep(0.5)
 
