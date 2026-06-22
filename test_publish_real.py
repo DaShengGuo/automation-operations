@@ -45,31 +45,11 @@ for loop in range(1, 4):
     ctrl.comment.input_comment_text(cw['content'])
     time.sleep(2)
 
-    # 关键盘 (键盘遮挡了工具栏，必须关)
-    ctrl.base.d.press('back')
-    time.sleep(1.5)
-
-    # Step3: 点图片按钮(desc=图片) — 轮询最多5秒
-    step(3, "点图片按钮")
-    found = False
-    for _ in range(10):
-        for d in ["图片", "插入图片"]:
-            els = list(ctrl.d(description=d))
-            if els:
-                logger.info(f"找到图片按钮: desc={d}, count={len(els)}")
-                els[0].click()
-                found = True
-                break
-        if found:
-            break
-        time.sleep(0.5)
-    if not found:
-        # 兜底: dump hierarchy 看原因
-        xml = ctrl.base.dump_hierarchy()
-        import re
-        descs = set(re.findall(r'content-desc=\"([^\"]+)\"', xml))
-        logger.error(f"未找到图片按钮! 可用desc: {[d for d in descs if d.strip()][:20]}")
-        continue
+    # Step3: 点图片按钮 — 键盘打开时不能dump层级, 直接用坐标
+    # 真机dump: [24,1439][88,1527] center=(56,1483) ratio=(0.078,0.904)
+    step(3, "点图片按钮(坐标)")
+    ctrl.base._tap_ratio(0.078, 0.904)
+    time.sleep(3)
         continue
     time.sleep(4)
 
