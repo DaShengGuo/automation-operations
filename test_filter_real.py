@@ -47,7 +47,8 @@ try:
         time.sleep(1)
         stats["total"] += 1
 
-        # Dump hierarchy 看点赞/评论数
+        # 截图 + Dump hierarchy
+        ss = ctrl.base.screenshot(f"filter_real_{int(time.time())}")
         xml = ctrl.base.dump_hierarchy()
 
         # 检测直播
@@ -58,9 +59,17 @@ try:
             time.sleep(random.uniform(1.5, 2.5))
             continue
 
-        # 获取评论数
+        # 获取评论数 (hierarchy优先, OCR兜底)
         cc = get_comment_count(xml)
-        if cc < 50:  # 评论太少, 跳过
+        if cc == 0:
+            # hierarchy可能没抓到, OCR右侧评论区数字
+            try:
+                right_texts = crop_and_ocr(ss, (0.85, 0.55, 1.0, 0.70))
+                for t in right_texts:
+                    m = re.search(r'(\d+\.?\d*万?)', t)
+                    if m: cc = parse_wan(m.group(1)); break
+            except: pass
+        if cc < 500:  # 低于500条跳过
             stats["skip"] += 1
             ctrl.d.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
             time.sleep(random.uniform(1.5, 2.5))
