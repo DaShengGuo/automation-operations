@@ -35,10 +35,7 @@ def do_publish():
         el = D(className='android.widget.EditText')
         if el.exists: el.click()
         time.sleep(1); D.send_keys(text); time.sleep(2)
-        for desc in ["插入图片","图片"]:
-            el = D(description=desc)
-            if el.exists: el.click(); break
-        else: ctrl.base._tap_ratio(0.089, 0.904)
+        ctrl.base._tap_ratio(0.089, 0.904)  # 图片按钮坐标
         time.sleep(3)
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
