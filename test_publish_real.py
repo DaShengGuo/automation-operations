@@ -49,8 +49,6 @@ for loop in range(1, 4):
     # 真机dump: [24,1439][88,1527] center=(56,1483) ratio=(0.078,0.904)
     step(3, "点图片按钮(坐标)")
     ctrl.base._tap_ratio(0.078, 0.904)
-    time.sleep(3)
-        continue
     time.sleep(4)
 
     # Step4: 选第1张图 → 下一步
@@ -66,16 +64,9 @@ for loop in range(1, 4):
     time.sleep(3)
 
     # Step5: 回到评论区, 点+号加第二张
+    # 真机dump: +号在 [456,1512][536,1592] center=(496,1552) ratio=(0.689,0.946)
     step(5, "点+号加第二张")
-    for d in ["图片", "插入图片"]:
-        els = list(ctrl.d(description=d))
-        if len(els) >= 2:
-            els[1].click()  # 第二个=+号
-            logger.info(f"+号: clicked els[1]")
-            break
-        elif els:
-            els[-1].click()
-            break
+    ctrl.base._tap_ratio(0.689, 0.946)
     time.sleep(4)
 
     # Step6: 选第2张图 → 下一步(2)
