@@ -79,6 +79,12 @@ try:
         stats["total"] += 1
 
         open_comments(); time.sleep(2)
+
+        # 滚动评论区3次, 加载更多评论时间
+        for _ in range(3):
+            D.swipe(360, int(1640*0.75), 360, int(1640*0.45), duration=0.3)
+            time.sleep(0.8)
+
         xml = D.dump_hierarchy()
 
         if '回复' not in xml:
@@ -86,15 +92,15 @@ try:
             D.press('back'); time.sleep(0.5)
             continue
 
-        # 提取时间, 统计5分钟内的
+        # 提取时间, 统计30分钟内的
         time_texts = TIME_RE.findall(xml)
         times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
-        recent = [t for t in times if t <= 5]
+        recent = [t for t in times if t <= 30]
         has_now = any('刚刚' in t or '秒前' in t for t in time_texts)
 
         if len(recent) >= 2 or has_now:
             stats["pass"] += 1
-            logger.info(f"  #{stats['total']} {len(times)}条时间 5min内:{len(recent)} -> 发布")
+            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布")
             D.press('back'); time.sleep(0.5)
             do_publish()
         else:
