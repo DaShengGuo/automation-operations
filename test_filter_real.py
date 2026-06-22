@@ -6,11 +6,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("filter_real")
 
+# 设备序列号: 命令行参数 > 环境变量 > 默认值
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('DOUYIN_DEVICE', 'AQV4TSDY9PCEIZ8L')
+logger.info(f"设备: {DEVICE}")
+
 from douyin_core.adb_controller import DouyinController
 from douyin_core.ocr_engine import parse_comment_time
 from comment_bot.materials import MaterialManager
 
-ctrl = DouyinController('AQV4TSDY9PCEIZ8L')
+ctrl = DouyinController(DEVICE)
 D = ctrl.d
 mm = MaterialManager()
 TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|半小时前|刚刚|\d+秒前)')
@@ -91,35 +95,32 @@ try:
 
         open_comments(); time.sleep(2)
 
-        # 滚动评论区6次
-        for _ in range(6):
+        # 滚动+dump+累加时间 (每次滚动都dump, 收集所有评论时间)
+        all_times = []
+        for i in range(1, 7):
             D.swipe(360, int(1640*0.75), 360, int(1640*0.45), duration=0.3)
             time.sleep(0.8)
+            xml = D.dump_hierarchy()
+            # 健康检查
+            if len(xml) < 30000:
+                if i == 1:
+                    logger.warning(f"hierarchy异常({len(xml)}chars)")
+                continue
+            if '回复' not in xml:
+                continue
+            texts = TIME_RE.findall(xml)
+            ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
+            all_times.extend(ts)
 
-        xml = D.dump_hierarchy()
-
-        # 健康检查: hierarchy太短说明服务断了, 重启
-        if len(xml) < 30000:
-            logger.warning(f"hierarchy异常({len(xml)}chars), 重启u2服务...")
-            try: D.press('back')
-            except: pass
-            try:
-                import uiautomator2 as u2
-                u2.connect('AQV4TSDY9PCEIZ8L').reset_uiautomator()
-                time.sleep(3)
-            except: pass
-            continue
-
-        if '回复' not in xml:
+        if not all_times:
             stats["nocomment"] += 1
             D.press('back'); time.sleep(0.5)
             continue
 
-        # 提取时间, 统计30分钟内的
-        time_texts = TIME_RE.findall(xml)
-        times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
+        # 统计30分钟内的
+        times = all_times
         recent = [t for t in times if t <= 30]
-        has_now = any('刚刚' in t or '秒前' in t for t in time_texts)
+        has_now = any(t <= 1 for t in times)  # 1分钟内有评论=高新鲜
 
         # 时间太少=评论区不活跃, 跳过
         if len(times) < 5:
@@ -133,7 +134,7 @@ try:
             do_publish()  # 评论区已打开, 直接发布不关
         else:
             stats["stale"] += 1
-            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过 样本:{time_texts[:5]}")
+            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过")
             D.press('back')
         time.sleep(0.5)
 
