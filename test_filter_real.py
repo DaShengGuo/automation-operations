@@ -111,6 +111,12 @@ try:
         recent = [t for t in times if t <= 30]
         has_now = any('刚刚' in t or '秒前' in t for t in time_texts)
 
+        # 时间太少=评论区不活跃, 跳过
+        if len(times) < 5:
+            stats["nocomment"] += 1
+            D.press('back'); time.sleep(0.5)
+            continue
+
         if len(recent) >= 2 or has_now:
             stats["pass"] += 1
             logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布")
