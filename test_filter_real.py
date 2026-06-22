@@ -22,17 +22,10 @@ SEND_BTN  = (0.89, 0.90)
 CIRCLE1   = (0.58, 0.23)
 CIRCLE2   = (0.91, 0.23)
 TIME_RE   = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|刚刚|\d+秒前)')
-COUNT_RE  = re.compile(r'评论(\d+\.?\d*万?|\d+)')
 
 def swipe():
     D.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
     time.sleep(random.uniform(1.5, 2.5))
-
-def parse_count(s):
-    s = s.strip().replace(',','')
-    if '万' in s: return int(float(s.replace('万',''))*10000)
-    try: return int(s)
-    except: return 0
 
 def open_comments():
     try:
@@ -81,18 +74,21 @@ try:
         else:
             swipe()
         stats["total"] += 1
-        open_comments()
-        time.sleep(2)
 
-        xml = D.dump_hierarchy()
-
-        # 检查评论区数量(desc=评论XXX)
-        cc_m = COUNT_RE.search(xml)
-        cc = parse_count(cc_m.group(1)) if cc_m else 0
+        # 播放页先dump拿评论总数(在按钮desc里)
+        pre_xml = D.dump_hierarchy()
+        cc_m = re.search(r'评论(\d+\.?\d*万?|\d+)', pre_xml)
+        cc = 0
+        if cc_m:
+            s = cc_m.group(1).replace(',','')
+            cc = int(float(s.replace('万',''))*10000) if '万' in s else int(s)
         if cc < 500:
             stats["nocomment"] += 1
-            D.press('back'); time.sleep(0.5)
             continue
+
+        open_comments()
+        time.sleep(2)
+        xml = D.dump_hierarchy()
 
         if '回复' not in xml:
             stats["nocomment"] += 1
@@ -106,25 +102,20 @@ try:
             time_texts = [t for t in ocr if TIME_RE.match(t)]
 
         times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
-        total = len(times)
+        total_t = len(times)
         has_now = any('刚刚' in t or '秒前' in t for t in time_texts)
+        # 宽松判断: 只要有任何5分钟内的评论就通过
+        has_recent = any(t <= 5 for t in times)
 
-        if total == 0 and not has_now:
-            D.press('back')
-            stats["stale"] += 1
-            logger.info(f"  #{stats['total']} 评论{cc}条 无新鲜评论")
-        else:
+        if has_recent or has_now:
+            stats["pass"] += 1
             fresh5 = sum(1 for t in times if t <= 5)
-            fresh15 = sum(1 for t in times if t <= 15)
-            score = (fresh5/max(total,1))*0.6 + (fresh15/max(total,1))*0.4
-            if score >= FRESHNESS or has_now:
-                stats["pass"] += 1
-                logger.info(f"  #{stats['total']} 评论{cc}条 {total}时间 5min:{fresh5} 评分:{score:.2f} -> 发布")
-                D.press('back'); time.sleep(0.5)
-                do_publish()
-            else:
-                stats["stale"] += 1
-                D.press('back')
+            logger.info(f"  #{stats['total']} {total_t}条时间 5min内:{fresh5} -> 发布")
+            D.press('back'); time.sleep(0.5)
+            do_publish()
+        else:
+            stats["stale"] += 1
+            D.press('back')
 
         time.sleep(0.5)
         if stats["total"] % 10 == 0:
