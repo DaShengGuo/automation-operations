@@ -43,20 +43,33 @@ for loop in range(1, 4):
     cw = mm.pick_copywriting()
     logger.info(f"文案: {cw['content'][:40]}")
     ctrl.comment.input_comment_text(cw['content'])
-    time.sleep(3)
+    time.sleep(2)
 
-    # Step3: 点图片按钮(desc=图片)
+    # 关键盘 (键盘遮挡了工具栏，必须关)
+    ctrl.base.d.press('back')
+    time.sleep(1.5)
+
+    # Step3: 点图片按钮(desc=图片) — 轮询最多5秒
     step(3, "点图片按钮")
     found = False
-    for d in ["图片", "插入图片"]:
-        els = list(ctrl.d(description=d))
-        if els:
-            logger.info(f"找到图片按钮: desc={d}, count={len(els)}")
-            els[0].click()
-            found = True
+    for _ in range(10):
+        for d in ["图片", "插入图片"]:
+            els = list(ctrl.d(description=d))
+            if els:
+                logger.info(f"找到图片按钮: desc={d}, count={len(els)}")
+                els[0].click()
+                found = True
+                break
+        if found:
             break
+        time.sleep(0.5)
     if not found:
-        logger.error("未找到图片按钮!")
+        # 兜底: dump hierarchy 看原因
+        xml = ctrl.base.dump_hierarchy()
+        import re
+        descs = set(re.findall(r'content-desc=\"([^\"]+)\"', xml))
+        logger.error(f"未找到图片按钮! 可用desc: {[d for d in descs if d.strip()][:20]}")
+        continue
         continue
     time.sleep(4)
 
