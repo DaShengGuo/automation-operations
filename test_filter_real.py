@@ -27,9 +27,8 @@ def open_comments():
     ctrl.base._tap_ratio(0.931, 0.378)
 
 def do_publish():
-    """发布(已确认流程)"""
+    """发布(评论区已打开, 直接发布)"""
     try:
-        open_comments(); time.sleep(2)
         cw1 = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
         text = cw1['content'] + '\n' + cw2['content']
@@ -109,15 +108,13 @@ try:
         # 提取时间, 统计30分钟内的
         time_texts = TIME_RE.findall(xml)
         times = [parse_comment_time(t) for t in time_texts if parse_comment_time(t) < 99999]
-        logger.info(f"  时间样本: {time_texts[:10]} -> {times[:10]}")
         recent = [t for t in times if t <= 30]
         has_now = any('刚刚' in t or '秒前' in t for t in time_texts)
 
         if len(recent) >= 2 or has_now:
             stats["pass"] += 1
             logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布")
-            D.press('back'); time.sleep(0.5)
-            do_publish()
+            do_publish()  # 评论区已打开, 直接发布不关
         else:
             stats["stale"] += 1
             logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过 样本:{time_texts[:5]}")
