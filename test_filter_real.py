@@ -79,6 +79,19 @@ try:
         else: swipe()
         stats["total"] += 1
 
+        # 播放页: 从content-desc提取评论数
+        pre_xml = D.dump_hierarchy()
+        cc = 0
+        for m in re.finditer(r'content-desc="([^"]*)"', pre_xml):
+            d = m.group(1)
+            cm = re.search(r'评论(\d+\.?\d*万?|\d+)', d)
+            if cm:
+                s = cm.group(1).replace(',','')
+                cc = int(float(s.replace('万',''))*10000) if '万' in s else int(s)
+                break
+        if cc < 500:
+            continue
+
         open_comments(); time.sleep(2)
 
         # 滚动评论区6次
