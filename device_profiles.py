@@ -48,7 +48,7 @@ _HONOR = {
     "img_btn_fallback": (0.089, 0.922),
     "notes": "dump确认: 输入(0.497,0.797) 图片(0.089,0.922) desc=插入图片"
 }
-for _s in ["AADE9X3919W01912","AADE9X3A13W01108","AADE9X3A20W00120","AADE9X3A21W05111"]:
+for _s in ["AADE9X3919W01912","AADE9X3A13W01108","AADE9X3A20W00120","AADE9X3A21W05111","AADE9X3824W00603","AADE9X3A19W01593"]:
     PROFILES[_s] = dict(_HONOR)
 
 def get_profile(device_serial):
