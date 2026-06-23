@@ -42,11 +42,7 @@ def do_publish():
         el = D(className='android.widget.EditText')
         if el.exists: el.click()
         time.sleep(1)
-        # 用set_text支持换行, 不用send_keys(enter会发送)
-        try:
-            D(focused=True).set_text(cw1['content'] + '\n' + cw2['content'])
-        except:
-            D.send_keys(cw1['content'] + ' ' + cw2['content'])
+        D.send_keys(cw1['content'] + '\n' + cw2['content'])
         time.sleep(2)
         # 图片按钮: 元素优先, 坐标兜底
         for desc in ['插入图片','图片']:
@@ -139,12 +135,12 @@ try:
         has_now = any(t <= 1 for t in times)  # 1分钟内有评论=高新鲜
 
         # 时间太少=评论区不活跃, 跳过
-        if len(times) < 6:
+        if len(times) < 3:
             stats["nocomment"] += 1
             D.press('back'); time.sleep(0.5)
             continue
 
-        if len(recent) >= 6 or has_now:
+        if len(recent) >= 3 or has_now:
             stats["pass"] += 1
             logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布(已发布{publish_count}次)")
             if do_publish():
