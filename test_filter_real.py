@@ -53,11 +53,14 @@ def do_publish():
             el = D(text=t)
             if el.exists: el.click(); break
         time.sleep(3)
-        # Step5: 点+号 — 用底部desc=插入图片
-        for desc in ['插入图片', 'image']:
-            els = list(D(description=desc))
-            if len(els) >= 2: els[1].click(); break
-            elif els: els[0].click(); break
+        # Step5: 点+号 — rid=iv_image
+        el = D(resourceId='com.ss.android.ugc.aweme:id/iv_image')
+        if el.exists: el.click()
+        else:
+            for desc in ['插入图片', 'image']:
+                els = list(D(description=desc))
+                if len(els) >= 2: els[1].click(); break
+                elif els: els[0].click(); break
         time.sleep(3)
         # Step6: 选第2张图+下一步
         ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
