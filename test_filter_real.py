@@ -41,7 +41,7 @@ def do_publish():
         cw = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
         while cw2['content'] == cw['content']: cw2 = mm.pick_copywriting()
-        text = cw['content'] + chr(10) + cw2['content']
+        text = cw['content'] + ' ' + cw2['content']
         click_rid("erc")
         time.sleep(1); D.send_keys(text); time.sleep(2)
         # Step3: 点图片按钮(键盘打开时只有坐标可用)
