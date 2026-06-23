@@ -53,21 +53,26 @@ def do_publish():
             el = D(text=t)
             if el.exists: el.click(); break
         time.sleep(3)
-        # Step5: 点+号 — rid=iv_image
-        el = D(resourceId='com.ss.android.ugc.aweme:id/iv_image')
-        if el.exists: el.click()
-        else:
+        # Step5: 点+号 — 等UI稳定后找iv_image
+        found_plus = False
+        for _ in range(5):
+            time.sleep(1)
+            el = D(resourceId='com.ss.android.ugc.aweme:id/iv_image')
+            if el.exists: el.click(); found_plus = True; break
+        if not found_plus:
             for desc in ['插入图片', 'image']:
                 els = list(D(description=desc))
-                if len(els) >= 2: els[1].click(); break
-                elif els: els[0].click(); break
-        time.sleep(3)
-        # Step6: 选第2张图+下一步
-        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
-            el = D(text=t)
-            if el.exists: el.click(); break
-        time.sleep(3)
+                if len(els) >= 2: els[1].click(); found_plus = True; break
+                elif els: els[0].click(); found_plus = True; break
+        if not found_plus:
+            logger.warning('+号未找到, 仅发1张图')
+        else:
+            # Step6: 选第2张图+下一步
+            ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
+            for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
+                el = D(text=t)
+                if el.exists: el.click(); break
+        time.sleep(2)
         # Step7: 点发送 — 纯文本选择器
         for txt in ["发送","发布"]:
             el = D(text=txt)
