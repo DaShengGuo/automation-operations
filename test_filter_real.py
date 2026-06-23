@@ -34,22 +34,15 @@ def open_comments():
 
 def do_publish():
     try:
-        xml = D.dump_hierarchy()
-        if '回复' not in xml:
-            logger.warning('评论区已关闭,跳过发布')
-            return False
+        open_comments()
+        time.sleep(2)
         cw1 = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
         while cw2['content'] == cw1['content']:
             cw2 = mm.pick_copywriting()
-        text = cw1['content'] + '\n' + cw2['content']
-        # 取最底部的输入框(评论区有多个erc: 主输入框+回复框)
-        els = list(D(resourceId='com.ss.android.ugc.aweme:id/erc'))
-        if not els:
-            els = list(D(className='android.widget.EditText'))
-        if els:
-            target = max(els, key=lambda e: e.info.get('bounds',{}).get('bottom',0))
-            target.click()
+        text = cw1['content'] + chr(10) + cw2['content']
+        el = D(className='android.widget.EditText')
+        if el.exists: el.click()
         time.sleep(1); D.send_keys(text); time.sleep(2)
         ctrl.base._tap_ratio(0.089, 0.904)
         time.sleep(3)
@@ -83,6 +76,7 @@ def do_publish():
     except Exception as e:
         logger.error(f"发布异常:{e}")
         return False
+
 
 logger.info("真机筛选+发布 Ctrl+C停止")
 stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
