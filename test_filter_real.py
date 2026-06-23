@@ -45,13 +45,16 @@ def do_publish():
         click_input()
         time.sleep(1); D.send_keys(text); time.sleep(3)
         # Step3: 点图片按钮
-        found_img = False
-        for desc in PROFILE['img_btn_descs']:
-            el = D(description=desc)
-            if el.exists: el.click(); found_img = True; break
-        if not found_img:
-            ctrl.base._tap_ratio(*PROFILE['img_btn_fallback'])
-        logger.info(f"  图片按钮: {'选择器' if found_img else '坐标兜底'}")
+        descs = PROFILE.get('img_btn_descs', [])
+        if descs:
+            found_img = False
+            for desc in descs:
+                el = D(description=desc)
+                if el.exists: el.click(); found_img = True; break
+            if not found_img:
+                ctrl.base._tap_ratio(*PROFILE['img_btn_fallback'])
+        else:
+            ctrl.base._tap_ratio(*PROFILE.get('img_btn_coord', PROFILE['img_btn_fallback']))
         time.sleep(3)
         # Step4: 选第1张图+下一步
         ctrl.base._tap_ratio(*PROFILE['circle1']); time.sleep(3)
@@ -73,10 +76,13 @@ def do_publish():
         else:
             ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
         time.sleep(2)
-        # Step7: 点发送 — 纯文本选择器
-        for txt in ["发送","发布"]:
-            el = D(text=txt)
-            if el.exists: el.click(); break
+        # Step7: 点发送
+        if PROFILE.get('send_btn_coord'):
+            ctrl.base._tap_ratio(*PROFILE['send_btn_coord'])
+        else:
+            for txt in ["发送","发布"]:
+                el = D(text=txt)
+                if el.exists: el.click(); break
         time.sleep(2)
         # Step8: 验证
         ok = ctrl.comment.verify_comment_published()
@@ -88,7 +94,9 @@ def do_publish():
         logger.error(f"发布异常:{e}"); return False
 
 def click_input():
-    """点击输入框 — 尝试配置中的资源ID"""
+    """点击输入框 — 配置中的资源ID或坐标"""
+    if PROFILE.get('input_coord'):
+        ctrl.base._tap_ratio(*PROFILE['input_coord']); return
     for rid in PROFILE['input_rids']:
         el = D(resourceId=f'com.ss.android.ugc.aweme:id/{rid}')
         if el.exists: el.click(); return
