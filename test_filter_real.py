@@ -35,6 +35,8 @@ def do_publish():
     try:
         cw1 = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
+        while cw2['content'] == cw1['content']:
+            cw2 = mm.pick_copywriting()
         text = cw1['content'] + '\n' + cw2['content']
         el = D(className='android.widget.EditText')
         if el.exists: el.click()
@@ -67,8 +69,10 @@ def do_publish():
         ctrl.nav.close_comments()
         ctrl.comment.reset_keyboard_state()
         time.sleep(2)
+        return ok
     except Exception as e:
         logger.error(f"发布异常:{e}")
+        return False
 
 logger.info("真机筛选+发布 Ctrl+C停止")
 stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
@@ -123,15 +127,22 @@ try:
         has_now = any(t <= 1 for t in times)  # 1分钟内有评论=高新鲜
 
         # 时间太少=评论区不活跃, 跳过
-        if len(times) < 5:
+        if len(times) < 6:
             stats["nocomment"] += 1
             D.press('back'); time.sleep(0.5)
             continue
 
-        if len(recent) >= 2 or has_now:
+        if len(recent) >= 6 or has_now:
             stats["pass"] += 1
-            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布")
-            do_publish()  # 评论区已打开, 直接发布不关
+            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布(已发布{publish_count}次)")
+            if do_publish():
+                publish_count += 1
+                logger.info(f"  累计发布: {publish_count}/35")
+                if publish_count >= 35:
+                    logger.info(f"  === 已达35条, 暂停10分钟 ===")
+                    time.sleep(600)
+                    publish_count = 0
+                    logger.info(f"  === 暂停结束, 继续 ===")
         else:
             stats["stale"] += 1
             logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过")
