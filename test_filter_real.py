@@ -166,8 +166,8 @@ try:
             D.press('back'); time.sleep(0.5)
             if do_publish():
                 publish_count += 1
-                if publish_count >= 35:
-                    logger.info("=== 35条,暂停10分钟 ===")
+                if publish_count >= 20:
+                    logger.info("=== 20条,暂停10分钟 ===")
                     time.sleep(600); publish_count = 0
         else:
             stats["stale"] += 1

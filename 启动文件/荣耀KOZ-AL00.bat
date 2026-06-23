@@ -1,8 +1,4 @@
 @echo off
-chcp 65001 >nul
-cd /d "C:\Users\郭宝盛\OneDrive\桌面\自动化运营"
-echo ============================
-echo   荣耀 KOZ-AL00 自动启动
-echo ============================
+cd /d "%~dp0.."
 python auto_launch.py honor
 pause
