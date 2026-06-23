@@ -52,10 +52,12 @@ def do_publish():
         logger.info(f"  图片按钮: {'选择器' if found_img else '坐标兜底'}")
         time.sleep(3)
         # Step4: 选第1张图+下一步
-        ctrl.base._tap_ratio(0.58, 0.23); time.sleep(2)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
+        ctrl.base._tap_ratio(0.58, 0.23); time.sleep(3)
+        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
             el = D(text=t)
-            if el.exists: el.click(); break
+            if el.exists: el.click(); time.sleep(1); break
+        else:
+            ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
         time.sleep(3)
         # Step5: 点+号 — 扫描候选位置
         time.sleep(2)
@@ -66,10 +68,12 @@ def do_publish():
             if '拍照' in D.dump_hierarchy(): logger.info(f'+号命中:({px},{py})'); break
         time.sleep(3)
         # Step6: 选第2张图+下一步
-        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
+        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(3)
+        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
             el = D(text=t)
-            if el.exists: el.click(); break
+            if el.exists: el.click(); time.sleep(1); break
+        else:
+            ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
         time.sleep(2)
         # Step7: 点发送 — 纯文本选择器
         for txt in ["发送","发布"]:
