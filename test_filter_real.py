@@ -12,13 +12,15 @@ logger.info(f"设备: {DEVICE}")
 from douyin_core.adb_controller import DouyinController
 from douyin_core.ocr_engine import parse_comment_time
 from comment_bot.materials import MaterialManager
+from device_profiles import get_profile
 
 ctrl = DouyinController(DEVICE)
 D = ctrl.d
 mm = MaterialManager()
 TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|半小时前|刚刚|\d+秒前)')
 SW, SH = ctrl.base.screen_w, ctrl.base.screen_h
-logger.info(f"分辨率: {SW}x{SH}")
+PROFILE = get_profile(DEVICE)
+logger.info(f"分辨率: {SW}x{SH} 配置: {PROFILE.get('notes','默认')}")
 
 def swipe():
     D.swipe(SW//2, int(SH*0.55), SW//2, int(SH*0.25), duration=0.3)
@@ -44,27 +46,27 @@ def do_publish():
         time.sleep(1); D.send_keys(text); time.sleep(3)
         # Step3: 点图片按钮
         found_img = False
-        for desc in ['插入图片', 'image']:
+        for desc in PROFILE['img_btn_descs']:
             el = D(description=desc)
             if el.exists: el.click(); found_img = True; break
         if not found_img:
-            ctrl.base._tap_ratio(0.078, 0.904)
+            ctrl.base._tap_ratio(*PROFILE['img_btn_fallback'])
         logger.info(f"  图片按钮: {'选择器' if found_img else '坐标兜底'}")
         time.sleep(3)
         # Step4: 选第1张图+下一步
-        ctrl.base._tap_ratio(0.58, 0.23); time.sleep(3)
+        ctrl.base._tap_ratio(*PROFILE['circle1']); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
             el = D(text=t)
             if el.exists: el.click(); time.sleep(1); break
         else:
             ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
         time.sleep(3)
-        # Step5: 点+号 — 确认坐标 (0.30, 0.76)
+        # Step5: 点+号
         time.sleep(2)
-        ctrl.base._tap_ratio(0.30, 0.76)
+        ctrl.base._tap_ratio(*PROFILE['plus_btn'])
         time.sleep(3)
         # Step6: 选第2张图+下一步
-        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(3)
+        ctrl.base._tap_ratio(*PROFILE['circle2']); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
             el = D(text=t)
             if el.exists: el.click(); time.sleep(1); break
@@ -86,11 +88,10 @@ def do_publish():
         logger.error(f"发布异常:{e}"); return False
 
 def click_input():
-    """点击输入框 — 尝试所有已知资源ID"""
-    for rid in ['erc', 'ern', 'ej3']:
+    """点击输入框 — 尝试配置中的资源ID"""
+    for rid in PROFILE['input_rids']:
         el = D(resourceId=f'com.ss.android.ugc.aweme:id/{rid}')
         if el.exists: el.click(); return
-    # 兜底: 底部坐标
     ctrl.base._tap_ratio(0.35, 0.95)
 
 def click_rid(name):
@@ -138,7 +139,6 @@ try:
             texts = TIME_RE.findall(xml)
             ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
             all_times.extend(ts)
-            logger.info(f"  滚动{i}: +{len(ts)}条时间, 累计30min内:{sum(1 for t in all_times if t<=30)}")
 
         if not all_times:
             stats["nocomment"] += 1
