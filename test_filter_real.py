@@ -46,15 +46,15 @@ def do_publish():
         time.sleep(1); D.send_keys(text); time.sleep(3)
         # Step3: 点图片按钮
         descs = PROFILE.get('img_btn_descs', [])
+        found_img = False
         if descs:
-            found_img = False
             for desc in descs:
                 el = D(description=desc)
-                if el.exists: el.click(); found_img = True; break
-            if not found_img:
-                ctrl.base._tap_ratio(*PROFILE['img_btn_fallback'])
-        else:
-            ctrl.base._tap_ratio(*PROFILE.get('img_btn_coord', PROFILE['img_btn_fallback']))
+                if el.exists: el.click(); found_img = True; logger.info(f'  图片btn: desc={desc}'); break
+        if not found_img:
+            coord = PROFILE.get('img_btn_coord', PROFILE['img_btn_fallback'])
+            ctrl.base._tap_ratio(*coord)
+            logger.info(f'  图片btn: 坐标{coord}')
         time.sleep(3)
         # Step4: 选第1张图+下一步
         ctrl.base._tap_ratio(*PROFILE['circle1']); time.sleep(3)
