@@ -33,22 +33,22 @@ def open_comments():
     ctrl.base._tap_ratio(0.931, 0.378)
 
 def do_publish():
-    """发布(评论区已打开, 直接发布)"""
     try:
+        xml = D.dump_hierarchy()
+        if '回复' not in xml:
+            logger.warning('评论区已关闭,重新打开')
+            open_comments(); time.sleep(2)
         cw1 = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
         while cw2['content'] == cw1['content']:
             cw2 = mm.pick_copywriting()
-        el = D(className='android.widget.EditText')
+        text = cw1['content'] + '\n' + cw2['content']
+        el = D(resourceId='com.ss.android.ugc.aweme:id/erc')
+        if not el.exists:
+            el = D(className='android.widget.EditText')
         if el.exists: el.click()
-        time.sleep(1)
-        D.send_keys(cw1['content'] + '\n' + cw2['content'])
-        time.sleep(2)
-        # 图片按钮: 元素优先, 坐标兜底
-        for desc in ['插入图片','图片']:
-            el = D(description=desc)
-            if el.exists: el.click(); break
-        else: ctrl.base._tap_ratio(0.089, 0.904)
+        time.sleep(1); D.send_keys(text); time.sleep(2)
+        ctrl.base._tap_ratio(0.089, 0.904)
         time.sleep(3)
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
@@ -63,7 +63,7 @@ def do_publish():
             el = D(text=t)
             if el.exists: el.click(); time.sleep(1); break
         else:
-            ctrl.base._tap_ratio(0.50, 0.96)  # 坐标兜底
+            ctrl.base._tap_ratio(0.50, 0.96)
             time.sleep(1)
         time.sleep(3)
         for txt in ["发送","发布"]:
