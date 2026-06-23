@@ -44,11 +44,8 @@ def do_publish():
         text = cw['content'] + chr(10) + cw2['content']
         click_rid("erc")
         time.sleep(1); D.send_keys(text); time.sleep(2)
-        # Step3: 点图片按钮
-        for desc in ["image","插入图片","图片"]:
-            el = D(description=desc)
-            if el.exists: el.click(); break
-        else: ctrl.base._tap_ratio(0.089, 0.904)
+        # Step3: 点图片按钮(键盘打开时只有坐标可用)
+        ctrl.base._tap_ratio(0.522, 0.946)
         time.sleep(3)
         # Step4: 选第1张图+下一步
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(2)
