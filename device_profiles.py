@@ -40,13 +40,13 @@ _HONOR = {
     "model": "KOZ-AL00",
     "resolution": [720, 1600],
     "douyin_version": "37.8.0",
-    "plus_btn": (0.35, 0.55),
-    "img_btn_coord": (0.125, 0.572),
-    "send_btn_coord": (0.89, 0.572),
-    "input_coord": (0.50, 0.513),
-    "img_btn_descs": [],
-    "img_btn_fallback": (0.125, 0.572),
-    "notes": "键盘弹起时工具栏y=0.572, 图片(0.125,0.572) 发送(0.89,0.572) 输入(0.50,0.513)"
+    "plus_btn": (0.30, 0.76),
+    "img_btn_coord": (0.089, 0.922),
+    "send_btn_coord": (0.89, 0.90),
+    "input_coord": (0.497, 0.797),
+    "img_btn_descs": ["插入图片"],  # dump确认desc存在
+    "img_btn_fallback": (0.089, 0.922),
+    "notes": "dump确认: 输入(0.497,0.797) 图片(0.089,0.922) desc=插入图片"
 }
 for _s in ["AADE9X3919W01912","AADE9X3A13W01108","AADE9X3A20W00120","AADE9X3A21W05111"]:
     PROFILES[_s] = dict(_HONOR)
