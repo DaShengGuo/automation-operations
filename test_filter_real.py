@@ -125,18 +125,20 @@ try:
         all_times = []
         bad_dumps = 0
         for i in range(1, 7):
+            # 先检查是否已找到足够新鲜评论
+            if sum(1 for t in all_times if t <= 30) >= 2: break
             D.swipe(SW//2, int(SH*0.75), SW//2, int(SH*0.45), duration=0.3)
             time.sleep(0.8)
             xml = D.dump_hierarchy()
             if len(xml) < 30000 or '回复' not in xml:
                 bad_dumps += 1
-                if bad_dumps >= 3: break  # 连续3次异常, 放弃
+                if bad_dumps >= 3: break
                 continue
             bad_dumps = 0
             texts = TIME_RE.findall(xml)
             ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
             all_times.extend(ts)
-            if sum(1 for t in all_times if t <= 30) >= 2: break
+            logger.info(f"  滚动{i}: +{len(ts)}条时间, 累计30min内:{sum(1 for t in all_times if t<=30)}")
 
         if not all_times:
             stats["nocomment"] += 1
