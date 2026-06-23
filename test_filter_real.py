@@ -18,9 +18,11 @@ ctrl = DouyinController(DEVICE)
 D = ctrl.d
 mm = MaterialManager()
 TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|半小时前|刚刚|\d+秒前)')
+SW, SH = ctrl.base.screen_w, ctrl.base.screen_h
+logger.info(f"分辨率: {SW}x{SH}")
 
 def swipe():
-    D.swipe(360, int(1640*0.55), 360, int(1640*0.25), duration=0.3)
+    D.swipe(SW//2, int(SH*0.55), SW//2, int(SH*0.25), duration=0.3)
     time.sleep(random.uniform(1.5, 2.5))
 
 def open_comments():
@@ -76,6 +78,7 @@ def do_publish():
 
 logger.info("真机筛选+发布 Ctrl+C停止")
 stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
+publish_count = 0
 first = True
 
 try:
@@ -102,7 +105,7 @@ try:
         # 滚动+dump+累加时间 (每次滚动都dump, 收集所有评论时间)
         all_times = []
         for i in range(1, 7):
-            D.swipe(360, int(1640*0.75), 360, int(1640*0.45), duration=0.3)
+            D.swipe(SW//2, int(SH*0.75), SW//2, int(SH*0.45), duration=0.3)
             time.sleep(0.8)
             xml = D.dump_hierarchy()
             # 健康检查
