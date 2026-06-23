@@ -26,6 +26,8 @@ MUMU_ADB_ADDR = os.environ.get("MUMU_ADB_ADDR", "127.0.0.1:7555")
 # ADB 可执行文件路径（系统 PATH 或 Android SDK）
 _ADB_CANDIDATES = [
     os.environ.get("ADB_PATH", ""),
+    str(PROJECT_ROOT / "adb" / "platform-tools" / "adb.exe"),
+    str(PROJECT_ROOT / "adb" / "platform-tools" / "adb"),
     str(Path.home() / "AppData/Local/Android/Sdk/platform-tools/adb.exe"),
     str(Path.home() / "AppData/Local/Android/Sdk/platform-tools/adb"),
     "adb",  # fallback: 依赖 PATH
