@@ -117,14 +117,16 @@ try:
         open_comments(); time.sleep(2)
 
         all_times = []
+        bad_dumps = 0
         for i in range(1, 7):
             D.swipe(SW//2, int(SH*0.75), SW//2, int(SH*0.45), duration=0.3)
             time.sleep(0.8)
             xml = D.dump_hierarchy()
-            if len(xml) < 30000:
-                if i == 1: logger.warning(f"hierarchy异常({len(xml)}chars)")
+            if len(xml) < 30000 or '回复' not in xml:
+                bad_dumps += 1
+                if bad_dumps >= 3: break  # 连续3次异常, 放弃
                 continue
-            if '回复' not in xml: continue
+            bad_dumps = 0
             texts = TIME_RE.findall(xml)
             ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
             all_times.extend(ts)
