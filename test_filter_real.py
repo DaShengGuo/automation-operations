@@ -40,13 +40,12 @@ def do_publish():
         # Step2: 输入文案
         cw = mm.pick_copywriting()
         text = cw['content']
-        click_rid("erc")
+        click_input()
         time.sleep(1); D.send_keys(text); time.sleep(2)
-        # Step3: 点图片按钮 — desc=插入图片优先, 坐标兜底
+        # Step3: 点图片按钮 — 纯元素选择器
         for desc in ['插入图片', 'image']:
             el = D(description=desc)
             if el.exists: el.click(); break
-        else: ctrl.base._tap_ratio(0.078, 0.904)
         time.sleep(3)
         # Step4: 选第1张图+下一步
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(2)
@@ -54,19 +53,22 @@ def do_publish():
             el = D(text=t)
             if el.exists: el.click(); break
         time.sleep(3)
-        # Step5: 点+号
-        ctrl.base._tap_ratio(0.30, 0.76); time.sleep(3)
+        # Step5: 点+号 — 用底部desc=插入图片
+        for desc in ['插入图片', 'image']:
+            els = list(D(description=desc))
+            if len(els) >= 2: els[1].click(); break
+            elif els: els[0].click(); break
+        time.sleep(3)
         # Step6: 选第2张图+下一步
         ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
             el = D(text=t)
             if el.exists: el.click(); break
         time.sleep(3)
-        # Step7: 点发送
+        # Step7: 点发送 — 纯文本选择器
         for txt in ["发送","发布"]:
             el = D(text=txt)
             if el.exists: el.click(); break
-        else: ctrl.base._tap_ratio(0.894, 0.946)
         time.sleep(2)
         # Step8: 验证
         ok = ctrl.comment.verify_comment_published()
@@ -77,15 +79,17 @@ def do_publish():
     except Exception as e:
         logger.error(f"发布异常:{e}"); return False
 
+def click_input():
+    """点击输入框 — 尝试所有已知资源ID"""
+    for rid in ['erc', 'ern', 'ej3']:
+        el = D(resourceId=f'com.ss.android.ugc.aweme:id/{rid}')
+        if el.exists: el.click(); return
+    # 兜底: 底部坐标
+    ctrl.base._tap_ratio(0.35, 0.95)
+
 def click_rid(name):
-    el = D(resourceId=f"com.ss.android.ugc.aweme:id/{name}")
-    if el.exists: el.click(); return True
-    # 抖音更新后 erc→ern, 都尝试
-    if name == 'erc':
-        el2 = D(resourceId='com.ss.android.ugc.aweme:id/ern')
-        if el2.exists: el2.click(); return True
-        ctrl.base._tap_ratio(0.35, 0.95); return True
-    return False
+    """旧接口兼容"""
+    click_input()
 # ====== 发布结束 ======
 
 logger.info("真机筛选+发布 Ctrl+C停止")
