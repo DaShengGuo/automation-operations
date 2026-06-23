@@ -39,13 +39,14 @@ def do_publish():
         time.sleep(2)
         # Step2: 输入文案
         cw = mm.pick_copywriting()
-        cw2 = mm.pick_copywriting()
-        while cw2['content'] == cw['content']: cw2 = mm.pick_copywriting()
-        text = cw['content'] + ' ' + cw2['content']
+        text = cw['content']
         click_rid("erc")
         time.sleep(1); D.send_keys(text); time.sleep(2)
-        # Step3: 点图片按钮(键盘打开时只有坐标可用)
-        ctrl.base._tap_ratio(0.522, 0.946)
+        # Step3: 点图片按钮 — desc=插入图片优先, 坐标兜底
+        for desc in ['插入图片', 'image']:
+            el = D(description=desc)
+            if el.exists: el.click(); break
+        else: ctrl.base._tap_ratio(0.078, 0.904)
         time.sleep(3)
         # Step4: 选第1张图+下一步
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(2)
@@ -65,7 +66,7 @@ def do_publish():
         for txt in ["发送","发布"]:
             el = D(text=txt)
             if el.exists: el.click(); break
-        else: ctrl.base._tap_ratio(0.89, 0.90)
+        else: ctrl.base._tap_ratio(0.894, 0.946)
         time.sleep(2)
         # Step8: 验证
         ok = ctrl.comment.verify_comment_published()
@@ -79,8 +80,10 @@ def do_publish():
 def click_rid(name):
     el = D(resourceId=f"com.ss.android.ugc.aweme:id/{name}")
     if el.exists: el.click(); return True
-    # erc 不再存在(抖音更新了), 用坐标兜底
+    # 抖音更新后 erc→ern, 都尝试
     if name == 'erc':
+        el2 = D(resourceId='com.ss.android.ugc.aweme:id/ern')
+        if el2.exists: el2.click(); return True
         ctrl.base._tap_ratio(0.35, 0.95); return True
     return False
 # ====== 发布结束 ======
@@ -121,7 +124,7 @@ try:
             texts = TIME_RE.findall(xml)
             ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
             all_times.extend(ts)
-            if sum(1 for t in all_times if t <= 30) >= 3: break
+            if sum(1 for t in all_times if t <= 30) >= 2: break
 
         if not all_times:
             stats["nocomment"] += 1
@@ -131,11 +134,11 @@ try:
         recent = [t for t in times if t <= 30]
         has_now = any(t <= 1 for t in times)
 
-        if len(times) < 3:
+        if len(times) < 2:
             stats["nocomment"] += 1
             D.press('back'); time.sleep(0.5); continue
 
-        if len(recent) >= 3 or has_now:
+        if len(recent) >= 2 or has_now:
             stats["pass"] += 1
             logger.info(f"  #{stats['total']} {len(times)}条 30min内:{len(recent)} -> 发布({publish_count}/35)")
             D.press('back'); time.sleep(0.5)
