@@ -48,8 +48,10 @@ _HONOR = {
     "img_btn_fallback": (0.089, 0.922),
     "notes": "+号自动扫描, 输入(0.497,0.797) 图片(0.089,0.922)"
 }
-for _s in ["AADE9X3919W01912","AADE9X3A13W01108","AADE9X3A20W00120","AADE9X3A21W05111","AADE9X3824W00603","AADE9X3A19W01593"]:
+for _s in ["AADE9X3919W01912","AADE9X3A13W01108","AADE9X3A20W00120","AADE9X3A21W05111","AADE9X3A19W01593"]:
     PROFILES[_s] = dict(_HONOR)
+# AADE9X3824W00603 图片按钮位置不同
+PROFILES["AADE9X3824W00603"] = dict(_HONOR, img_btn_coord=(0.050, 0.920), img_btn_fallback=(0.050, 0.920))
 
 def get_profile(device_serial):
     """获取设备配置, 合并默认值"""
