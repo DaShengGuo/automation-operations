@@ -1,12 +1,11 @@
 """
-真机筛选+发布 — 评论区有2条以上5分钟内评论就发布
+真机筛选+发布
 """
 import sys, time, random, logging, os, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("filter_real")
 
-# 设备序列号: 命令行参数 > 环境变量 > 默认值
 DEVICE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('DOUYIN_DEVICE', 'AQV4TSDY9PCEIZ8L')
 logger.info(f"设备: {DEVICE}")
 
@@ -32,51 +31,62 @@ def open_comments():
     except: pass
     ctrl.base._tap_ratio(0.931, 0.378)
 
+# ====== 发布(完全复制 test_publish_real.py) ======
 def do_publish():
     try:
-        open_comments()
+        # Step1: 打开评论区
+        ctrl.nav.open_comments()
         time.sleep(2)
-        cw1 = mm.pick_copywriting()
+        # Step2: 输入文案
+        cw = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
-        while cw2['content'] == cw1['content']:
-            cw2 = mm.pick_copywriting()
-        text = cw1['content'] + chr(10) + cw2['content']
-        el = D(className='android.widget.EditText')
-        if el.exists: el.click()
+        while cw2['content'] == cw['content']: cw2 = mm.pick_copywriting()
+        text = cw['content'] + chr(10) + cw2['content']
+        click_rid("erc")
         time.sleep(1); D.send_keys(text); time.sleep(2)
-        ctrl.base._tap_ratio(0.089, 0.904)
+        # Step3: 点图片按钮
+        for desc in ["image","插入图片","图片"]:
+            el = D(description=desc)
+            if el.exists: el.click(); break
+        else: ctrl.base._tap_ratio(0.089, 0.904)
         time.sleep(3)
-        ctrl.base._tap_ratio(0.58, 0.23); time.sleep(3)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
+        # Step4: 选第1张图+下一步
+        ctrl.base._tap_ratio(0.58, 0.23); time.sleep(2)
+        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
             el = D(text=t)
-            if el.exists: el.click(); time.sleep(1); break
-        else:
-            ctrl.base._tap_ratio(0.50, 0.96)
+            if el.exists: el.click(); break
         time.sleep(3)
+        # Step5: 点+号
         ctrl.base._tap_ratio(0.30, 0.76); time.sleep(3)
-        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(3)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
+        # Step6: 选第2张图+下一步
+        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
+        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
             el = D(text=t)
-            if el.exists: el.click(); time.sleep(1); break
-        else:
-            ctrl.base._tap_ratio(0.50, 0.96)
-            time.sleep(1)
+            if el.exists: el.click(); break
         time.sleep(3)
+        # Step7: 点发送
         for txt in ["发送","发布"]:
             el = D(text=txt)
             if el.exists: el.click(); break
         else: ctrl.base._tap_ratio(0.89, 0.90)
         time.sleep(2)
+        # Step8: 验证
         ok = ctrl.comment.verify_comment_published()
         logger.info(f"  发布:{'成功' if ok else '待确认'}")
         ctrl.nav.close_comments()
-        ctrl.comment.reset_keyboard_state()
-        time.sleep(2)
+        ctrl.comment.reset_keyboard_state(); time.sleep(2)
         return ok
     except Exception as e:
-        logger.error(f"发布异常:{e}")
-        return False
+        logger.error(f"发布异常:{e}"); return False
 
+def click_rid(name):
+    el = D(resourceId=f"com.ss.android.ugc.aweme:id/{name}")
+    if el.exists: el.click(); return True
+    # erc 不再存在(抖音更新了), 用坐标兜底
+    if name == 'erc':
+        ctrl.base._tap_ratio(0.35, 0.95); return True
+    return False
+# ====== 发布结束 ======
 
 logger.info("真机筛选+发布 Ctrl+C停止")
 stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
@@ -89,7 +99,6 @@ try:
         else: swipe()
         stats["total"] += 1
 
-        # 播放页: 从content-desc提取评论数
         pre_xml = D.dump_hierarchy()
         cc = 0
         for m in re.finditer(r'content-desc="([^"]*)"', pre_xml):
@@ -99,14 +108,11 @@ try:
                 s = cm.group(1).replace(',','')
                 cc = int(float(s.replace('万',''))*10000) if '万' in s else int(s)
                 break
-        if cc < 500:
-            continue
+        if cc < 500: continue
 
         open_comments(); time.sleep(2)
 
-        # 滚动+dump+累加时间, 找到3条30min内就提前退出
         all_times = []
-        found_enough = False
         for i in range(1, 7):
             D.swipe(SW//2, int(SH*0.75), SW//2, int(SH*0.45), duration=0.3)
             time.sleep(0.8)
@@ -114,45 +120,35 @@ try:
             if len(xml) < 30000:
                 if i == 1: logger.warning(f"hierarchy异常({len(xml)}chars)")
                 continue
-            if '回复' not in xml:
-                continue
+            if '回复' not in xml: continue
             texts = TIME_RE.findall(xml)
             ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
             all_times.extend(ts)
-            if sum(1 for t in all_times if t <= 30) >= 3:
-                found_enough = True
-                break
+            if sum(1 for t in all_times if t <= 30) >= 3: break
 
         if not all_times:
             stats["nocomment"] += 1
-            D.press('back'); time.sleep(0.5)
-            continue
+            D.press('back'); time.sleep(0.5); continue
 
-        # 统计30分钟内的
         times = all_times
         recent = [t for t in times if t <= 30]
-        has_now = any(t <= 1 for t in times)  # 1分钟内有评论=高新鲜
+        has_now = any(t <= 1 for t in times)
 
-        # 时间太少=评论区不活跃, 跳过
         if len(times) < 3:
             stats["nocomment"] += 1
-            D.press('back'); time.sleep(0.5)
-            continue
+            D.press('back'); time.sleep(0.5); continue
 
         if len(recent) >= 3 or has_now:
             stats["pass"] += 1
-            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} -> 发布(已发布{publish_count}次)")
+            logger.info(f"  #{stats['total']} {len(times)}条 30min内:{len(recent)} -> 发布({publish_count}/35)")
+            D.press('back'); time.sleep(0.5)
             if do_publish():
                 publish_count += 1
-                logger.info(f"  累计发布: {publish_count}/35")
                 if publish_count >= 35:
-                    logger.info(f"  === 已达35条, 暂停10分钟 ===")
-                    time.sleep(600)
-                    publish_count = 0
-                    logger.info(f"  === 暂停结束, 继续 ===")
+                    logger.info("=== 35条,暂停10分钟 ===")
+                    time.sleep(600); publish_count = 0
         else:
             stats["stale"] += 1
-            logger.info(f"  #{stats['total']} {len(times)}条时间 30min内:{len(recent)} 跳过")
             D.press('back')
         time.sleep(0.5)
 
