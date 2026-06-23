@@ -34,15 +34,10 @@ def open_comments():
 
 def do_publish():
     try:
-        # 滚回评论区顶部
-        for _ in range(6):
-            D.swipe(SW//2, int(SH*0.45), SW//2, int(SH*0.75), duration=0.2)
-            time.sleep(0.3)
-        time.sleep(1)
         xml = D.dump_hierarchy()
         if '回复' not in xml:
-            logger.warning('评论区已关闭,重新打开')
-            open_comments(); time.sleep(2)
+            logger.warning('评论区已关闭,跳过发布')
+            return False
         cw1 = mm.pick_copywriting()
         cw2 = mm.pick_copywriting()
         while cw2['content'] == cw1['content']:
