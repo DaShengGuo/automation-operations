@@ -41,11 +41,15 @@ def do_publish():
         cw = mm.pick_copywriting()
         text = cw['content']
         click_input()
-        time.sleep(1); D.send_keys(text); time.sleep(2)
-        # Step3: 点图片按钮 — 纯元素选择器
+        time.sleep(1); D.send_keys(text); time.sleep(3)
+        # Step3: 点图片按钮
+        found_img = False
         for desc in ['插入图片', 'image']:
             el = D(description=desc)
-            if el.exists: el.click(); break
+            if el.exists: el.click(); found_img = True; break
+        if not found_img:
+            ctrl.base._tap_ratio(0.078, 0.904)
+        logger.info(f"  图片按钮: {'选择器' if found_img else '坐标兜底'}")
         time.sleep(3)
         # Step4: 选第1张图+下一步
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(2)
@@ -55,10 +59,11 @@ def do_publish():
         time.sleep(3)
         # Step5: 点+号 — 等UI稳定后找iv_image
         found_plus = False
-        for _ in range(5):
-            time.sleep(1)
+        for _ in range(8):
+            time.sleep(1.5)
             el = D(resourceId='com.ss.android.ugc.aweme:id/iv_image')
-            if el.exists: el.click(); found_plus = True; break
+            if el.exists and el.info.get('clickable', False):
+                el.click(); found_plus = True; break
         if not found_plus:
             for desc in ['插入图片', 'image']:
                 els = list(D(description=desc))
