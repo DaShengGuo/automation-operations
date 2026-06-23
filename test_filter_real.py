@@ -48,10 +48,13 @@ def do_publish():
         while cw2['content'] == cw1['content']:
             cw2 = mm.pick_copywriting()
         text = cw1['content'] + '\n' + cw2['content']
-        el = D(resourceId='com.ss.android.ugc.aweme:id/erc')
-        if not el.exists:
-            el = D(className='android.widget.EditText')
-        if el.exists: el.click()
+        # 取最底部的输入框(评论区有多个erc: 主输入框+回复框)
+        els = list(D(resourceId='com.ss.android.ugc.aweme:id/erc'))
+        if not els:
+            els = list(D(className='android.widget.EditText'))
+        if els:
+            target = max(els, key=lambda e: e.info.get('bounds',{}).get('bottom',0))
+            target.click()
         time.sleep(1); D.send_keys(text); time.sleep(2)
         ctrl.base._tap_ratio(0.089, 0.904)
         time.sleep(3)
@@ -112,22 +115,24 @@ try:
 
         open_comments(); time.sleep(2)
 
-        # 滚动+dump+累加时间 (每次滚动都dump, 收集所有评论时间)
+        # 滚动+dump+累加时间, 找到3条30min内就提前退出
         all_times = []
+        found_enough = False
         for i in range(1, 7):
             D.swipe(SW//2, int(SH*0.75), SW//2, int(SH*0.45), duration=0.3)
             time.sleep(0.8)
             xml = D.dump_hierarchy()
-            # 健康检查
             if len(xml) < 30000:
-                if i == 1:
-                    logger.warning(f"hierarchy异常({len(xml)}chars)")
+                if i == 1: logger.warning(f"hierarchy异常({len(xml)}chars)")
                 continue
             if '回复' not in xml:
                 continue
             texts = TIME_RE.findall(xml)
             ts = [parse_comment_time(t) for t in texts if parse_comment_time(t) < 99999]
             all_times.extend(ts)
+            if sum(1 for t in all_times if t <= 30) >= 3:
+                found_enough = True
+                break
 
         if not all_times:
             stats["nocomment"] += 1
