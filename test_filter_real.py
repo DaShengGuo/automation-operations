@@ -57,26 +57,19 @@ def do_publish():
             el = D(text=t)
             if el.exists: el.click(); break
         time.sleep(3)
-        # Step5: 点+号 — 等UI稳定后找iv_image
-        found_plus = False
-        for _ in range(8):
+        # Step5: 点+号 — 扫描候选位置
+        time.sleep(2)
+        for px, py in [(0.47,0.95),(0.50,0.95),(0.55,0.95),(0.48,0.94),
+                        (0.25,0.95),(0.30,0.76),(0.20,0.85)]:
+            ctrl.base._tap_ratio(px, py)
             time.sleep(1.5)
-            el = D(resourceId='com.ss.android.ugc.aweme:id/iv_image')
-            if el.exists and el.info.get('clickable', False):
-                el.click(); found_plus = True; break
-        if not found_plus:
-            for desc in ['插入图片', 'image']:
-                els = list(D(description=desc))
-                if len(els) >= 2: els[1].click(); found_plus = True; break
-                elif els: els[0].click(); found_plus = True; break
-        if not found_plus:
-            logger.warning('+号未找到, 仅发1张图')
-        else:
-            # Step6: 选第2张图+下一步
-            ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
-            for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
-                el = D(text=t)
-                if el.exists: el.click(); break
+            if '拍照' in D.dump_hierarchy(): logger.info(f'+号命中:({px},{py})'); break
+        time.sleep(3)
+        # Step6: 选第2张图+下一步
+        ctrl.base._tap_ratio(0.91, 0.23); time.sleep(2)
+        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)"]:
+            el = D(text=t)
+            if el.exists: el.click(); break
         time.sleep(2)
         # Step7: 点发送 — 纯文本选择器
         for txt in ["发送","发布"]:
