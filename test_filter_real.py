@@ -59,13 +59,9 @@ def do_publish():
         else:
             ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
         time.sleep(3)
-        # Step5: 点+号 — 扫描候选位置
+        # Step5: 点+号 — 确认坐标 (0.30, 0.76)
         time.sleep(2)
-        for px, py in [(0.47,0.95),(0.50,0.95),(0.55,0.95),(0.48,0.94),
-                        (0.25,0.95),(0.30,0.76),(0.20,0.85)]:
-            ctrl.base._tap_ratio(px, py)
-            time.sleep(1.5)
-            if '拍照' in D.dump_hierarchy(): logger.info(f'+号命中:({px},{py})'); break
+        ctrl.base._tap_ratio(0.30, 0.76)
         time.sleep(3)
         # Step6: 选第2张图+下一步
         ctrl.base._tap_ratio(0.91, 0.23); time.sleep(3)
