@@ -39,11 +39,20 @@ def do_publish():
         cw2 = mm.pick_copywriting()
         while cw2['content'] == cw1['content']:
             cw2 = mm.pick_copywriting()
-        text = cw1['content'] + '\n' + cw2['content']
         el = D(className='android.widget.EditText')
         if el.exists: el.click()
-        time.sleep(1); D.send_keys(text); time.sleep(2)
-        ctrl.base._tap_ratio(0.089, 0.904)  # 图片按钮坐标
+        time.sleep(1)
+        # 用set_text支持换行, 不用send_keys(enter会发送)
+        try:
+            D(focused=True).set_text(cw1['content'] + '\n' + cw2['content'])
+        except:
+            D.send_keys(cw1['content'] + ' ' + cw2['content'])
+        time.sleep(2)
+        # 图片按钮: 元素优先, 坐标兜底
+        for desc in ['插入图片','图片']:
+            el = D(description=desc)
+            if el.exists: el.click(); break
+        else: ctrl.base._tap_ratio(0.089, 0.904)
         time.sleep(3)
         ctrl.base._tap_ratio(0.58, 0.23); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
