@@ -40,7 +40,7 @@ _HONOR = {
     "model": "KOZ-AL00",
     "resolution": [720, 1600],
     "douyin_version": "37.8.0",
-    "plus_btn": None,  # 自动扫描
+    "plus_btn": (0.30, 0.76),
     "img_btn_coord": (0.089, 0.922),
     "send_btn_coord": (0.89, 0.90),
     "input_coord": (0.497, 0.797),
