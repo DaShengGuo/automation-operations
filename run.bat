@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d c:\temp\douyin-framework
+cd /d "%~dp0"
 
 echo ========================================
 echo   抖音自动化评论运营系统

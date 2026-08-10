@@ -6,7 +6,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("filter_real")
 
-DEVICE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('DOUYIN_DEVICE', 'AQV4TSDY9PCEIZ8L')
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('DOUYIN_DEVICE', '')
+if not DEVICE:
+    print("请指定设备序列号:")
+    print("  python test_filter_real.py 设备序列号")
+    print("  或设置环境变量: set DOUYIN_DEVICE=设备序列号")
+    print("  运行 check-device.bat 查看已连接设备")
+    sys.exit(1)
 logger.info(f"设备: {DEVICE}")
 
 from douyin_core.adb_controller import DouyinController

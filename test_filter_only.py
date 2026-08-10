@@ -3,15 +3,14 @@
 每个视频: OCR → 关键词/CLIP/BGE → PASS/SKIP → PASS的检查评论区质量
 """
 import sys, time, random, logging, os
-os.makedirs('c:/temp/douyin-framework/data/logs', exist_ok=True)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from douyin_core import config as cfg
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger("filter_test")
-
-import os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from douyin_core.adb_controller import DouyinController
 from douyin_core.ocr_engine import crop_and_ocr, parse_comment_time
 from comment_bot.filter import VideoFilter, FilterResult

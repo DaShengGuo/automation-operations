@@ -14,13 +14,17 @@ logger = logging.getLogger("real")
 from douyin_core.adb_controller import DouyinController
 from comment_bot.materials import MaterialManager
 
-ctrl = DouyinController('AQV4TSDY9PCEIZ8L')
+DEVICE = os.environ.get('DOUYIN_DEVICE', '')
+if not DEVICE:
+    print("请设置 DOUYIN_DEVICE 环境变量")
+    sys.exit(1)
+ctrl = DouyinController(DEVICE)
 mm = MaterialManager()
 D = ctrl.d  # uiautomator2 device
 
 try:
     import uiautomator2 as u2
-    u2.connect('AQV4TSDY9PCEIZ8L').set_fastinput_ime(True)
+    u2.connect(DEVICE).set_fastinput_ime(True)
 except: pass
 
 # Resource IDs (真机dump确认)

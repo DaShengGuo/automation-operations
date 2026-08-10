@@ -18,22 +18,61 @@ env/
 *.swp
 *.swo
 
-# Environment
-.env
-.env.local
-
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Project
+# Environment & config (keep example)
+.env
+.env.local
+.env.production
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Runtime data (auto-generated)
 data/screenshots/*.png
+data/screenshots/*.jpg
 data/logs/*.log
 data/state.db
+data/state.db-journal
+data/state.db-wal
 data/models/
-douyin-framework/
+data/qdrant_data/
+data/*.xml
 
-# Large media files (not project code)
+# Logs
+logs/
+*.log
+
+# Cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Large media (not project code)
 *.mp4
 *.avi
-Snipaste_*.png
+
+# Archived/duplicate codebase
+douyin-framework/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Distribution
+*.zip
+*.7z
+*.rar
+
+# Node (if added later)
+node_modules/
+package-lock.json
+
+# Python virtual env
+*.venv/
+Pipfile.lock

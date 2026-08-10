@@ -10,7 +10,11 @@ logger = logging.getLogger("vision")
 from douyin_core.adb_controller import DouyinController
 from comment_bot.materials import MaterialManager
 
-ctrl = DouyinController('AQV4TSDY9PCEIZ8L')
+DEVICE = os.environ.get('DOUYIN_DEVICE', '')
+if not DEVICE:
+    print("请设置 DOUYIN_DEVICE 环境变量")
+    sys.exit(1)
+ctrl = DouyinController(DEVICE)
 mm = MaterialManager()
 
 screenshot_dir = os.path.join(os.path.dirname(__file__), 'data', 'screenshots')

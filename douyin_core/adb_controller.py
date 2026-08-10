@@ -491,27 +491,6 @@ class CommentActions:
                 continue
         return None
 
-    @property
-    def _img_btn_desc(self):
-        """图片按钮在不同版本Douyin上的desc不同: 插入图片 / 图片"""
-        if not hasattr(self, '_cached_img_desc'):
-            for d in ["插入图片", "图片"]:
-                if self.b.d(description=d).exists:
-                    self._cached_img_desc = d
-                    return d
-            self._cached_img_desc = "插入图片"  # fallback
-        return self._cached_img_desc
-
-    def _find_right_insert_img(self):
-        for e in self.b.d(description=self._img_btn_desc):
-            try:
-                b = e.info.get('bounds', {})
-                if b.get('left', 0) > 500:
-                    return e
-            except Exception:
-                continue
-        return None
-
     def _tap_add_more_button(self):
         """已选1张图后点+号。真机desc=图片, 模拟器desc=插入图片。"""
         els = list(self.b.d(description=self._img_btn_desc))

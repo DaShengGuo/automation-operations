@@ -6,12 +6,18 @@ import sys, time, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from douyin_core.adb_controller import DouyinController
 
-ctrl = DouyinController('AQV4TSDY9PCEIZ8L')
+import os
+DEVICE_SERIAL = os.environ.get('DOUYIN_DEVICE', '')
+if not DEVICE_SERIAL:
+    print("请设置环境变量 DOUYIN_DEVICE=你的设备序列号")
+    print("或运行: set DOUYIN_DEVICE=设备序列号 && python calibrate_real.py")
+    sys.exit(1)
+ctrl = DouyinController(DEVICE_SERIAL)
 
 # 启用 uiautomator2 键盘
 try:
     import uiautomator2 as u2
-    d = u2.connect('AQV4TSDY9PCEIZ8L')
+    d = u2.connect(DEVICE_SERIAL)
     d.set_fastinput_ime(True)
 except: pass
 
