@@ -63,16 +63,25 @@ cd automation-operations
 - 环境有问题 → 运行 `doctor.bat` 诊断
 - 详细帮助 → [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
-## 支持设备
+## Android 设备兼容性
 
-| 品牌 | 状态 |
+本项目采用**运行时设备检测 + 自适应坐标系统**，原则上支持
+大多数启用 ADB 调试的 Android 设备（Android 10+）。
+
+连接新手机后，程序自动：
+- 读取屏幕分辨率、DPI、品牌型号
+- 根据屏幕参数自动计算归一化坐标
+- 优先使用 UI 元素定位（resource-id / text / desc），坐标只作兜底
+
+**以下设备经作者实际测试验证：**
+
+| 设备 | 状态 |
 |------|------|
-| Redmi 14C (pond) | ✅ 已适配 |
-| Honor KOZ-AL00 | ✅ 已适配 |
-| Realme GT Neo2 | ⚠️ 需添加配置 |
-| 其他 Android | ⚠️ 需添加坐标配置 |
+| Redmi 14C (pond) | ✅ 已验证 |
+| Honor KOZ-AL00 | ✅ 已验证 |
+| 其他 Android 10+ | 🔵 自动检测适配 |
 
-> 其他机型需要在 `device_profiles.py` 中添加屏幕坐标配置。
+> 如遇新设备坐标偏移，运行 `init-device.bat` 完成一次自动校准即可。
 
 ## 项目结构
 

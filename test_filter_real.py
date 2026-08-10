@@ -18,15 +18,22 @@ logger.info(f"设备: {DEVICE}")
 from douyin_core.adb_controller import DouyinController
 from douyin_core.ocr_engine import parse_comment_time
 from comment_bot.materials import MaterialManager
-from device_profiles import get_profile
+from device_profiles import DeviceProfileManager
 
 ctrl = DouyinController(DEVICE)
-D = ctrl.d
 mm = MaterialManager()
+D = ctrl.d
 TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|半小时前|刚刚|\d+秒前)')
 SW, SH = ctrl.base.screen_w, ctrl.base.screen_h
-PROFILE = get_profile(DEVICE)
-logger.info(f"分辨率: {SW}x{SH} 配置: {PROFILE.get('notes','默认')}")
+
+# 自动解析设备配置（已验证 > 自动计算）
+DEVICE_PROFILE = DeviceProfileManager.resolve(DEVICE)
+logger.info(
+    f"分辨率: {DEVICE_PROFILE.width}x{DEVICE_PROFILE.height} "
+    f"dpi={DEVICE_PROFILE.density} "
+    f"已验证={DEVICE_PROFILE.is_verified} "
+    f"置信度={DEVICE_PROFILE.confidence:.0%}"
+)
 
 def swipe():
     D.swipe(SW//2, int(SH*0.55), SW//2, int(SH*0.25), duration=0.3)
@@ -51,19 +58,19 @@ def do_publish():
         click_input()
         time.sleep(1); D.send_keys(text); time.sleep(3)
         # Step3: 点图片按钮
-        descs = PROFILE.get('img_btn_descs', [])
+        descs = DEVICE_PROFILE.img_btn_descs
         found_img = False
         if descs:
             for desc in descs:
                 el = D(description=desc)
                 if el.exists: el.click(); found_img = True; logger.info(f'  图片btn: desc={desc}'); break
         if not found_img:
-            coord = PROFILE.get('img_btn_coord', PROFILE['img_btn_fallback'])
+            coord = DEVICE_PROFILE.img_btn_coord
             ctrl.base._tap_ratio(*coord)
             logger.info(f'  图片btn: 坐标{coord}')
         time.sleep(3)
         # Step4: 选第1张图+下一步
-        ctrl.base._tap_ratio(*PROFILE['circle1']); time.sleep(3)
+        ctrl.base._tap_ratio(*DEVICE_PROFILE.circle1); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
             el = D(text=t)
             if el.exists: el.click(); time.sleep(1); break
@@ -77,10 +84,10 @@ def do_publish():
             logger.warning('  第1张图未选上!')
         # Step5: 点+号
         time.sleep(2)
-        ctrl.base._tap_ratio(*PROFILE['plus_btn'])
+        ctrl.base._tap_ratio(*DEVICE_PROFILE.plus_btn)
         time.sleep(3)
         # Step6: 选第2张图+下一步
-        ctrl.base._tap_ratio(*PROFILE['circle2']); time.sleep(3)
+        ctrl.base._tap_ratio(*DEVICE_PROFILE.circle2); time.sleep(3)
         for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
             el = D(text=t)
             if el.exists: el.click(); time.sleep(1); break
@@ -88,8 +95,8 @@ def do_publish():
             ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
         time.sleep(2)
         # Step7: 点发送
-        if PROFILE.get('send_btn_coord'):
-            ctrl.base._tap_ratio(*PROFILE['send_btn_coord'])
+        if DEVICE_PROFILE.send_btn_coord:
+            ctrl.base._tap_ratio(*DEVICE_PROFILE.send_btn_coord)
         else:
             for txt in ["发送","发布"]:
                 el = D(text=txt)
@@ -106,9 +113,9 @@ def do_publish():
 
 def click_input():
     """点击输入框 — 配置中的资源ID或坐标"""
-    if PROFILE.get('input_coord'):
-        ctrl.base._tap_ratio(*PROFILE['input_coord']); return
-    for rid in PROFILE['input_rids']:
+    if DEVICE_PROFILE.input_coord:
+        ctrl.base._tap_ratio(*DEVICE_PROFILE.input_coord); return
+    for rid in DEVICE_PROFILE.input_rids:
         el = D(resourceId=f'com.ss.android.ugc.aweme:id/{rid}')
         if el.exists: el.click(); return
     ctrl.base._tap_ratio(0.35, 0.95)

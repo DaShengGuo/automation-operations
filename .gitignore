@@ -41,6 +41,7 @@ data/state.db-journal
 data/state.db-wal
 data/models/
 data/qdrant_data/
+data/user_profiles/
 data/*.xml
 
 # Logs
