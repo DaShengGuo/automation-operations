@@ -146,8 +146,8 @@ def click_rid(name):
 
 # 检查本地图片库是否有文件，有则推送到手机
 HAS_IMAGES = False
-from douyin_core import config as cfg
-img_dir = cfg.MATERIALS_DIR / "images"
+from pathlib import Path as _Path
+img_dir = _Path(__file__).resolve().parent / "对比图"
 local_imgs = list(img_dir.glob("*.jpg")) + list(img_dir.glob("*.png")) + list(img_dir.glob("*.jpeg"))
 if local_imgs:
     logger.info(f"检测到 {len(local_imgs)} 张本地图片，推送到手机...")
