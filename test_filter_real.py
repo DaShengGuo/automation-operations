@@ -27,7 +27,9 @@ TIME_RE = re.compile(r'(\d+分钟前|\d+小时前|\d+天前|半小时前|刚刚|
 SW, SH = ctrl.base.screen_w, ctrl.base.screen_h
 
 # 自动解析设备配置（已验证 > 自动计算）
-DEVICE_PROFILE = DeviceProfileManager.resolve(DEVICE)
+# 使用项目自带的 ADB 路径
+ADB_PATH = os.path.join(os.path.dirname(__file__), 'adb', 'platform-tools', 'adb.exe')
+DEVICE_PROFILE = DeviceProfileManager.resolve(DEVICE, ADB_PATH)
 logger.info(
     f"分辨率: {DEVICE_PROFILE.width}x{DEVICE_PROFILE.height} "
     f"dpi={DEVICE_PROFILE.density} "
