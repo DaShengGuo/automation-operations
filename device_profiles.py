@@ -56,12 +56,15 @@ class DeviceInfo:
     @classmethod
     def from_adb(cls, serial: str, adb_path: str = "adb") -> "DeviceInfo":
         """通过 ADB 自动读取设备完整信息"""
+        import os as _os
         info = cls(serial=serial)
+        # 确保使用绝对路径（subprocess.run 对相对路径敏感）
+        _adb = _os.path.abspath(adb_path) if not _os.path.isabs(adb_path) else adb_path
 
         def _shell(cmd: str) -> str:
             try:
                 r = subprocess.run(
-                    [adb_path, "-s", serial, "shell"] + cmd.split(),
+                    [_adb, "-s", serial, "shell"] + cmd.split(),
                     capture_output=True, text=True, timeout=10
                 )
                 return r.stdout.strip()
@@ -84,7 +87,10 @@ class DeviceInfo:
                 info.width, info.height = int(parts[0]), int(parts[1])
             except: pass
 
-        try: info.density = int(_shell("wm density"))
+        try:
+            density_str = _shell("wm density")
+            # "Physical density: 440" → 440
+            info.density = int(density_str.split(":")[-1].strip())
         except: pass
 
         # 横竖屏
