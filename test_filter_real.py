@@ -145,6 +145,16 @@ def click_rid(name):
     click_input()
 # ====== 发布结束 ======
 
+# 启动时推送图片到手机相册
+logger.info("推送图片到手机...")
+try:
+    from douyin_core.image_sync import sync_images_to_emulator
+    from douyin_core import config as cfg
+    pushed = sync_images_to_emulator(ADB_PATH, DEVICE, str(cfg.MATERIALS_DIR / "images"))
+    logger.info(f"已推送 ~{pushed} 张图片到手机")
+except Exception as e:
+    logger.warning(f"图片推送失败(将使用纯文本): {e}")
+
 logger.info("真机筛选+发布 Ctrl+C停止")
 stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
 publish_count = 0
