@@ -60,6 +60,12 @@ logs/
 # Archived/duplicate codebase
 douyin-framework/
 
+# User files (not project code)
+adb/platform-tools/gh.exe
+adb/platform-tools/gh.zip
+对比图/
+技术栈.txt
+
 # Temporary
 tmp/
 temp/
