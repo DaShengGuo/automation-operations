@@ -49,52 +49,69 @@ def open_comments():
 # ====== 发布(完全复制 test_publish_real.py) ======
 def do_publish():
     try:
-        # Step1: 打开评论区
+        # Step1: 获取文案 — 无文案则报错暂停
+        cw = mm.pick_copywriting()
+        if not cw:
+            logger.error("【致命】文案库为空！请在 materials/materials.xlsx 中添加评论文案后重新运行")
+            return False
+
+        # Step2: 获取图片 — 有则带图评论，无则纯文本
+        pair = mm.pick_image_pair() if hasattr(mm, 'pick_image_pair') else None
+        has_images = pair is not None
+
+        # Step3: 打开评论区
         ctrl.nav.open_comments()
         time.sleep(2)
-        # Step2: 输入文案
-        cw = mm.pick_copywriting()
+
+        # Step4: 输入文案
         text = cw['content']
         click_input()
         time.sleep(1); D.send_keys(text); time.sleep(3)
-        # Step3: 点图片按钮
-        descs = DEVICE_PROFILE.img_btn_descs
-        found_img = False
-        if descs:
-            for desc in descs:
-                el = D(description=desc)
-                if el.exists: el.click(); found_img = True; logger.info(f'  图片btn: desc={desc}'); break
-        if not found_img:
-            coord = DEVICE_PROFILE.img_btn_coord
-            ctrl.base._tap_ratio(*coord)
-            logger.info(f'  图片btn: 坐标{coord}')
-        time.sleep(3)
-        # Step4: 选第1张图+下一步
-        ctrl.base._tap_ratio(*DEVICE_PROFILE.circle1); time.sleep(3)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
-            el = D(text=t)
-            if el.exists: el.click(); time.sleep(1); break
+
+        if has_images:
+            # Step5: 点图片按钮
+            descs = DEVICE_PROFILE.img_btn_descs
+            found_img = False
+            if descs:
+                for desc in descs:
+                    el = D(description=desc)
+                    if el.exists: el.click(); found_img = True; logger.info(f'  图片btn: desc={desc}'); break
+            if not found_img:
+                coord = DEVICE_PROFILE.img_btn_coord
+                ctrl.base._tap_ratio(*coord)
+                logger.info(f'  图片btn: 坐标{coord}')
+            time.sleep(3)
+
+            # Step6: 选第1张图+下一步
+            ctrl.base._tap_ratio(*DEVICE_PROFILE.circle1); time.sleep(3)
+            for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
+                el = D(text=t)
+                if el.exists: el.click(); time.sleep(1); break
+            else:
+                ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
+            time.sleep(3)
+            if '[图片]' in D.dump_hierarchy():
+                logger.info('  第1张图已选')
+            else:
+                logger.warning('  第1张图未选上!')
+
+            # Step7: 点+号选第2张图
+            time.sleep(2)
+            ctrl.base._tap_ratio(*DEVICE_PROFILE.plus_btn)
+            time.sleep(3)
+            ctrl.base._tap_ratio(*DEVICE_PROFILE.circle2); time.sleep(3)
+            for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
+                el = D(text=t)
+                if el.exists: el.click(); time.sleep(1); break
+            else:
+                ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
+            time.sleep(2)
+
+            logger.info(f"  带图评论: {text[:30]}...")
         else:
-            ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
-        time.sleep(3)
-        # 验证第1张图是否选上
-        if '[图片]' in D.dump_hierarchy():
-            logger.info('  第1张图已选')
-        else:
-            logger.warning('  第1张图未选上!')
-        # Step5: 点+号
-        time.sleep(2)
-        ctrl.base._tap_ratio(*DEVICE_PROFILE.plus_btn)
-        time.sleep(3)
-        # Step6: 选第2张图+下一步
-        ctrl.base._tap_ratio(*DEVICE_PROFILE.circle2); time.sleep(3)
-        for t in ["下一步","下一步(1)","下一步(2)","下一步(3)","下一步(4)"]:
-            el = D(text=t)
-            if el.exists: el.click(); time.sleep(1); break
-        else:
-            ctrl.base._tap_ratio(0.50, 0.96); time.sleep(1)
-        time.sleep(2)
-        # Step7: 点发送
+            logger.info(f"  纯文本评论: {text[:30]}... (图片库无内容)")
+
+        # Step8: 点发送
         if DEVICE_PROFILE.send_btn_coord:
             ctrl.base._tap_ratio(*DEVICE_PROFILE.send_btn_coord)
         else:
@@ -102,7 +119,8 @@ def do_publish():
                 el = D(text=txt)
                 if el.exists: el.click(); break
         time.sleep(2)
-        # Step8: 验证
+
+        # Step9: 验证
         ok = ctrl.comment.verify_comment_published()
         logger.info(f"  发布:{'成功' if ok else '待确认'}")
         ctrl.nav.close_comments()
