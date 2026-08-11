@@ -19,21 +19,32 @@ def sync_images_to_emulator(adb_path: str, device_addr: str, images_dir: str) ->
     将本地图片推送到模拟器 Pictures 目录并触发媒体索引。
     返回推送数量。
     """
+    import os as _os
+    _adb = _os.path.abspath(adb_path) if not _os.path.isabs(adb_path) else adb_path
+
     src = Path(images_dir)
     if not src.exists():
         logger.warning(f"[图库同步] 目录不存在: {src}")
         return 0
 
+    # 检查图片文件是否存在
+    img_files = list(src.glob("*.jpg")) + list(src.glob("*.png")) + list(src.glob("*.jpeg"))
+    if not img_files:
+        logger.warning(f"[图库同步] 目录为空，无图片可推送: {src}")
+        return 0
+
+    logger.info(f"[图库同步] 待推送 {len(img_files)} 张图片")
+
     # 1. 创建目标目录
     subprocess.run(
-        [adb_path, "-s", device_addr, "shell", f"mkdir -p {DEST}"],
+        [_adb, "-s", device_addr, "shell", f"mkdir -p {DEST}"],
         capture_output=True, timeout=10,
     )
 
     # 2. 批量推送所有图片
     logger.info(f"[图库同步] 推送 {src} → {DEST}")
     result = subprocess.run(
-        [adb_path, "-s", device_addr, "push", str(src) + "/.", DEST],
+        [_adb, "-s", device_addr, "push", str(src) + "/.", DEST],
         capture_output=True, text=True, timeout=120,
     )
     pushed = result.stdout.count(".jpg") + result.stdout.count(".png")
@@ -41,7 +52,7 @@ def sync_images_to_emulator(adb_path: str, device_addr: str, images_dir: str) ->
 
     # 3. 逐文件触发媒体扫描（Android 11+ 需要）
     files_out = subprocess.run(
-        [adb_path, "-s", device_addr, "shell", f"ls {DEST}"],
+        [_adb, "-s", device_addr, "shell", f"ls {DEST}"],
         capture_output=True, text=True, timeout=10,
     )
     files = [f.strip() for f in files_out.stdout.split("\n") if "." in f]
@@ -51,7 +62,7 @@ def sync_images_to_emulator(adb_path: str, device_addr: str, images_dir: str) ->
     for fname in files:
         path = DEST + fname
         r = subprocess.run(
-            [adb_path, "-s", device_addr, "shell",
+            [_adb, "-s", device_addr, "shell",
              "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
              f"-d file://{path}"],
             capture_output=True, text=True, timeout=5,

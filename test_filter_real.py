@@ -57,9 +57,9 @@ def do_publish():
             logger.error("【致命】文案库为空！请在 materials/materials.xlsx 中添加评论文案后重新运行")
             return False
 
-        # Step2: 获取图片 — 有则带图评论，无则纯文本
+        # Step2: 获取图片 — 图片已推送且有素材才带图
         pair = mm.pick_image_pair() if hasattr(mm, 'pick_image_pair') else None
-        has_images = pair is not None
+        has_images = (pair is not None) and (IMAGES_PUSHED > 0)
 
         # Step3: 打开评论区
         ctrl.nav.open_comments()
@@ -146,14 +146,18 @@ def click_rid(name):
 # ====== 发布结束 ======
 
 # 启动时推送图片到手机相册
+IMAGES_PUSHED = 0
 logger.info("推送图片到手机...")
 try:
     from douyin_core.image_sync import sync_images_to_emulator
     from douyin_core import config as cfg
-    pushed = sync_images_to_emulator(ADB_PATH, DEVICE, str(cfg.MATERIALS_DIR / "images"))
-    logger.info(f"已推送 ~{pushed} 张图片到手机")
+    IMAGES_PUSHED = sync_images_to_emulator(ADB_PATH, DEVICE, str(cfg.MATERIALS_DIR / "images"))
+    logger.info(f"已推送 {IMAGES_PUSHED} 张图片到手机")
 except Exception as e:
-    logger.warning(f"图片推送失败(将使用纯文本): {e}")
+    logger.warning(f"图片推送失败: {e}")
+
+if IMAGES_PUSHED == 0:
+    logger.warning("图片库无内容或推送失败，将使用纯文本评论")
 
 logger.info("真机筛选+发布 Ctrl+C停止")
 stats = {"pass": 0, "nocomment": 0, "stale": 0, "total": 0}
