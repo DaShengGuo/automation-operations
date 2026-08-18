@@ -1,0 +1,222 @@
+# ============================================================
+# Pokémon GO 适配配置 — game_pokemon_go.yaml
+#
+# 文案来源: 真实人工录屏(宝可梦自动化.mp4) + 真机截图 OCR 提取,
+# 均为真实页面文本, 未虚构任何 selector。
+# 多语言变体(繁/简/英)按「OCR 关键词组」配置, 组内 AND、组间 OR。
+#
+# 浏览器原则: 本配置不含任何浏览器包名/品牌。点击 PTC 后由 Android
+# 系统自动调起该手机现有浏览器, 业务只检测「网页内容特征」。
+# ============================================================
+
+adapter: pokemon_go
+package: com.nianticlabs.pokemongo
+activity: com.nianticproject.holoholo.libholoholo.unity.UnityMainActivity
+
+# 图像模板匹配
+image:
+  threshold: 0.8
+
+# 步骤执行节奏
+automation:
+  step_interval: 1
+
+# 各阶段超时(秒)
+timeouts:
+  ptc_provider: 60         # RETURNING_PLAYER 后等登录方式页(游戏可能直接自动跳浏览器)
+  ptc_redirect: 60         # 点击PTC → 系统跳转浏览器
+  ptc_page_loading: 60     # 网页加载(允许白屏→慢加载)
+  auth_return: 75          # 网页认证 → 自动返回游戏(正常 32-50s; 75s 快速失败后重试用已建立的浏览器会话, 不干等 2 分钟)
+  game_loading: 120        # 游戏加载
+  shop_find: 90            # 商店滚动找商品总时长
+  purchase_manual: 300     # manual 模式人工确认等待
+  logout_verify: 60        # 退出后验证 RETURNING_PLAYER
+
+# ── 页面识别规则(检测顺序 = 定义顺序) ──────────────────────
+# ocr_rules: 关键词组列表(组内 AND, 组间 OR)。片段匹配以容忍
+#            OCR 对繁体字的识别误差(如 註→册、寶→貴)。
+# templates: 模板图片名(不含 .png), 位于 templates/game/
+states:
+  PTC_LOGIN_ERROR:
+    ocr_rules: []
+    hierarchy_texts: []
+  LOGOUT_CONFIRM:
+    ocr_rules:
+      - ["YES", "NO"]       # 英文确认弹窗(加引号防 YAML 布尔化)
+      - [是, 否]
+      - [确认, 退出]
+      - [確定, 退出]
+    min_hits: 1
+  PURCHASE_PROCESSING:
+    ocr_rules:
+      - [正在處理]
+      - [正在处理]
+      - [Processing]
+  PURCHASE_SUCCESS:
+    ocr_rules:
+      - [购买成功]
+      - [購買成功]
+      - [付款成功]
+      - [Purchase, complete]
+  PURCHASE_FAILED:
+    ocr_rules:
+      - [购买失败]
+      - [購買失敗]
+      - [交易失敗]
+      - [Payment, failed]
+  PRODUCT_FOUND:
+    # 由 ShopAutomation 动态检测(数量+货币+价格), 不配固定规则
+    ocr_rules: []
+  INITIAL_PROMPT:
+    ocr_rules:
+      - ["LET'S", GO]
+      - [去走路]
+      - [去走路了]
+  PROFESSOR_DIALOG:
+    # 录屏未出现博士对话帧 — 未标定(UNKNOWN_SELECTOR), 留空
+    ocr_rules: []
+  WELCOME_PAGE:
+    # 录屏未出现欢迎页帧 — 未标定(UNKNOWN_SELECTOR), 留空
+    ocr_rules: []
+  SETTINGS:
+    ocr_rules:
+      - [登出, 版本]         # 设置页底部特征(录屏验证: 登出+版本同页)
+      - [Sign, Out, Version]
+      - [音效, 震動]         # 真机设置页中部特征(0.417.6)
+      - [常見問題]           # 真机设置页右上角
+      - [進階設定]           # 真机设置页底部(登出在下一屏)
+    min_hits: 1
+  MAIN_MENU:
+    # 真机主菜单独有词: 圖鑑/對戰(商店商品区不会出现)。
+    # 注意: 不能用「道具/入場券」— 商店页也有(实测误判)
+    ocr_rules:
+      - [圖鑑]
+      - [宝可梦, 图鉴]
+      - [Pokédex]
+      - [對戰]
+      - [对战]
+      - [Battle]
+      - [Shop, Settings]
+    min_hits: 1
+  SHOP:
+    # 商店页特征(避开与主菜单/设置页冲突的词)
+    ocr_rules:
+      - [寶可幣, IDR]
+      - [PokéCoins]
+      - [Pokecoins]
+      - [新手禮盒]
+      - [加成禮盒]
+      - [看看别的貼圖]       # 繁体(真机 OCR 实拍: 看看别的貼圖)
+      - [看看别的贴圖]       # 简体变体
+      - [社群日]
+      - [偷兒狐]             # 活动入场券文案(真机)
+      - [每日獎勵禮盒]       # 真机商店商品(0.417.6)
+      - [連結能]             # 真机商店道具区商品
+    min_hits: 1
+  LOGIN_FAILED_DIALOG:
+    # 无法登入弹窗(真机实测: 残留失败会话被游戏记住, 冷启动直接弹)
+    # 必须用弹窗独有词「再試一次」判定: 登录方式页底部有「無法登入嗎?」
+    # 链接, 仅「無法登入」会误判(2026-08-16 run 11 实测误判根因)。
+    # 弹窗描述文本含「寶可夢訓練家中央站」— 必须在本状态先判定,
+    # 否则 LOGIN_PROVIDER 的 [中央站] 会误判并点到描述文字(卡顿根因)。
+    ocr_rules:
+      - [再試一次]
+      - [再试一次]
+    min_hits: 1
+  LOGIN_PROVIDER:
+    ocr_rules:
+      - [中央站]            # 寶可夢訓練家中央站(真机 OCR: "寶可萝訓鍊家中央站")
+      - [訓練家]
+      - [宝可梦, 中心]
+      - [Trainer, Club]
+      - [NIANTIC, KIDS]
+      - [Facebook, 登入]
+    min_hits: 1
+  RETURNING_PLAYER:
+    ocr_rules:
+      - [已, 玩家]           # 已註冊的玩家
+      - [已经, 玩家]
+      - [Returning, Player]
+      - [尚未, 玩家]
+      - [New, Player]
+    templates: [pgo_returning_player_btn, pgo_new_player_btn]
+    min_hits: 1
+  GAME_SPLASH:
+    ocr_rules:
+      - [ANNIVERSARY]
+      - [SCOPELY]
+      - [The, Pokémon, Company]
+    min_hits: 1
+  GAME_LOADING:
+    # 全屏 Pokémon GO 标题(无按钮) — 模板匹配; 无 splash 版权文字
+    ocr_rules: []
+    templates: [pgo_logo]
+    min_hits: 1
+  MAP:
+    # 主地图: 底部中央 Poké Ball(真机截图裁剪模板, 匹配位置实测 545,2205)
+    # 玩家昵称每账号变化, 不能作为固定特征; 地图元素几乎无文字(Unity)
+    ocr_rules: []
+    templates: [pgo_pokeball]
+    min_hits: 1
+
+# ── PTC 网页(浏览器无关, 只认网页内容) ─────────────────────
+ptc:
+  # 入口按钮文案(OCR 稳定片段 — 真机验证)
+  entry_texts:
+    returning_player: [已, 玩家]          # 已註冊的玩家
+    ptc_provider: [中央站]                 # 寶可夢訓練家中央站
+  # PTC 登录页内容特征(录屏+真机验证: access.pokemon.com 表单)
+  page_texts:
+    - Email or username
+    - Log in to your Pokémon Trainer Central account
+    - POKÉMON TRAINER CENTRAL
+    - Trouble logging in
+  # 登录错误分类
+  error_texts:
+    invalid_credentials:
+      - 用户名或密码错误
+      - 用户名或密码不正确
+      - Invalid username or password
+      - incorrect password
+  # 模板(未制作 → 不配置)
+  provider_template: null
+
+# ── 商店 ────────────────────────────────────────────────────
+shop:
+  entry_texts: [商店, Shop]
+  # 主菜单按钮布局(真机实测): 文字标签在上, 图标在下 — 点击偏移(px)
+  entry_click_offset: [0, 160]
+  close_texts: [×, X]
+  target:
+    amount: "100"                          # 100 PokéCoins
+    currencies: [寶可幣, 宝可币, PokéCoins, Pokecoins, 幣, 币]
+  max_scroll: 8
+
+# ── 购买(安全护栏) ──────────────────────────────────────────
+# mode: manual(默认, 到支付页暂停等人工) / dry_run(只读) / sandbox(自动购买, 需双重授权)
+# sandbox/自动购买需同时满足:
+#   1. 本配置 mode: sandbox
+#   2. .env 中 CONTROL_CENTER_ALLOW_PAYMENT=1 且 config.yaml payment.dry_run=false
+# 购买完成信号(真机业务特征): 一键购买/右滑购买后自动回到游戏商城
+purchase:
+  mode: dry_run   # 测试阶段: 只识别商品不进入支付(生产改 manual/sandbox)
+  manual_timeout: 300
+  auto_buy_texts: [一键购买, 购买, Buy]
+  auto_slide_texts: [滑動即可購買, 滑动即可购买]
+  result_timeout: 120
+
+# ── 退出登录 ────────────────────────────────────────────────
+logout:
+  ball_template: pgo_pokeball   # 主菜单 Poké Ball(真机模板)
+  settings_texts: [設定, 设置, Settings]
+  # 主菜单右上角齿轮图标(真机实测进入设置页), 设定文字 OCR 不可见时兜底
+  settings_icon_ratio: [0.84, 0.104]
+  signout_texts: [登出, 退出登录, Sign Out, Sign out]
+  # 注意加引号: YAML 1.1 会把裸 YES/Yes 解析为布尔值
+  yes_texts: ["YES", "Yes", "是"]
+
+# ── 首次进入流程 ────────────────────────────────────────────
+initial:
+  welcome_texts: [下一步, 繼續, 继续, OK]
+  dialog_texts: [繼續, 继续, 下一步, OK]
+  max_steps: 8

@@ -1,271 +1,448 @@
 """
-tests/test_integration.py — 全系统集成测试（不连设备）
+tests/test_integration.py
+中控系统集成测试（不连设备）
+
+覆盖端到端链路: 账号入库 → 原子领取 → DeviceWorker 状态机流水线
+→ 结果落库/导出, 以及生产安全护栏(支付 dry_run / 双重授权开关 /
+配置缺失快速失败 / 时间预算释放设备 / 多 Worker 并发不重复执行)。
+
+说明: 本文件全部使用 Fake 设备与脚本化自动化, 不代表真机测试结果。
+真机验证以 `python main.py doctor` / compat report 为准。
 """
 from __future__ import annotations
-import sys
-import os
-import tempfile
+
+import threading
 import time
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pytest
+
+from automation.base_game import BaseGameAutomation, LoginResult, TaskOutcome
+from core.actions import ActionExecutor
+from core.config import ControlConfig
+from core.device_worker import DeviceWorker
+from core.exceptions import PaymentBlockedError
+from core.state_machine import WorkerState
+from models.account import AccountStatus
+from models.page_state import PageState
+from models.task import TaskResult, TaskRunState
+from storage.database import Database
+from storage.repositories import AccountRepository, TaskResultRepository
+from tests.fakes import (BrokenAutomation, FakeAdb, FakeDeviceManager,
+                         ScriptedAutomation)
 
 
-class TestFullIntegration:
-    """端到端集成测试：验证所有模块协同工作"""
+# ── fixtures ──────────────────────────────────────────────────────
 
+@pytest.fixture
+def tmp_cfg(tmp_path):
+    """隔离配置 — 项目根指向 tmp_path, 不读真实 config/*.yaml"""
+    return ControlConfig(project_root=tmp_path)
+
+
+@pytest.fixture
+def repos(tmp_path):
+    db = Database(tmp_path / "runtime.db")
+    yield AccountRepository(db), TaskResultRepository(db)
+    db.close()
+
+
+def make_worker(serial, cfg, accounts, results,
+                automation_cls=None, device_manager=None):
+    """构造一个不自动启动线程的 DeviceWorker(测试手动驱动 _tick)"""
+    dm = device_manager or FakeDeviceManager()
+    cls = automation_cls or ScriptedAutomation
+    stop, pause = threading.Event(), threading.Event()
+    w = DeviceWorker(
+        serial=serial, cfg=cfg, device_manager=dm,
+        account_repo=accounts, result_repo=results,
+        automation_factory=lambda s: cls(s),
+        stop_event=stop, pause_event=pause)
+    return w, stop
+
+
+# ── 测试 ──────────────────────────────────────────────────────────
+
+class TestAllImports:
     def test_all_imports(self):
-        """验证所有模块可正常导入"""
-        from douyin_core import config
-        from douyin_core.adb_controller import (
-            DouyinController, BaseActions, NavigateActions,
-            CommentActions, UserActions
-        )
-        from douyin_core.ocr_engine import (
-            parse_comment_time, region_to_pixels,
-            crop_and_ocr, ocr_full_screen,
-            extract_video_title_texts, extract_comment_times
-        )
-        from comment_bot.fsm import CommentFSM, CommentTask, FSMState
-        from comment_bot.scheduler import TaskScheduler
-        from comment_bot.interrupt import InterruptController, BotState
-        from comment_bot.materials import MaterialManager
-        from comment_bot.filter import VideoFilter, FilterResult
-        from comment_bot.persistence import StateDB
-        from comment_bot.dashboard import app, set_refs, update_stats
-        from comment_bot.main import CommentBot
+        """新中控系统所有模块可导入(旧 comment_bot/douyin_core 已迁出)"""
+        from core import (account_manager, actions, adb_manager, config,
+                          coordinate, device_manager, device_worker,
+                          exceptions, image_matcher, logger, ocr, perf,
+                          popup_handler, qq_provider, state_machine,
+                          task_scheduler, ui_detector, watchdog)
+        from models import account, device, page_state, task
+        from storage import database, repositories
+        from automation import base_game, target_game
+        from automation.pokemon_go import (adapter, detector, logout,
+                                           recovery, selectors, shop,
+                                           states, web_context)
+        from api import server, websocket
+        import main  # CLI 入口可导入(不执行)
 
-        assert config.SCREEN_WIDTH == 1080
-        assert config.LIKE_WAIT_SEC == 300
+        # 关键默认语义: 支付默认禁止(真实 config.yaml 即 dry_run=true)
+        assert ControlConfig.load().payment_dry_run
 
-    def test_fsm_full_lifecycle(self):
-        """验证 FSM 完整生命周期"""
-        from comment_bot.fsm import CommentFSM, CommentTask, FSMState
 
-        task = CommentTask(video_id="v1", copywriting="测试文案")
-        fsm = CommentFSM(task)
+class TestWorkerPipeline:
+    def test_worker_full_lifecycle(self, tmp_cfg, repos):
+        """单账号完整流水线: 领取 → 状态机全链路 → SUCCESS → 结果落库"""
+        accounts, results = repos
+        accounts.add("user001", "pass1")
+        w, _ = make_worker("FAKE-INT-1", tmp_cfg, accounts, results)
 
-        # PENDING → POSTING → WAITING_LIKE
-        assert fsm.state == FSMState.PENDING
-        fsm.transition(FSMState.POSTING)
-        fsm.mark_posted()
-        assert fsm.state == FSMState.WAITING_LIKE
+        for _ in range(30):
+            w._tick()
+            if w.runtime.success_count >= 1:
+                break
 
-        # 有赞 → WAITING_REPLY
-        fsm.check_likes(has_likes=True)
-        assert fsm.state == FSMState.WAITING_REPLY
+        acc = accounts.get_by_account("user001")
+        assert acc.status == AccountStatus.SUCCESS
+        assert w.runtime.success_count == 1
+        rows = results.list()
+        assert len(rows) == 1
+        assert rows[0]["state"] == TaskRunState.SUCCESS.value
+        assert rows[0]["device_serial"] == "FAKE-INT-1"
+        assert rows[0]["duration_sec"] >= 0
+        # 状态机按预期顺序走过关键状态
+        sources = {s.value for s, _ in w.fsm.history}
+        for state in ("START_GAME", "LOGIN", "EXECUTE_TASK",
+                      "LOGOUT", "CLEANUP"):
+            assert state in sources
+        # 下一账号预取: 队列空时 account 释放
+        assert w.account is None
 
-        # 有回复 → REPLYING
-        fsm.check_replies(has_replies=True)
-        assert fsm.state == FSMState.REPLYING
+    def test_multi_worker_concurrency_no_duplicate(self, tmp_cfg, repos):
+        """3 Worker 并发领取 6 账号 — 每账号恰好执行一次(多设备压力测试
+        的单元侧; 真机 3 设备并发见 docs/REMEDIATION 未测项)"""
+        accounts, results = repos
+        for i in range(6):
+            accounts.add(f"user{i:03d}", "p")
+        tmp_cfg.system["poll_interval"] = 0.05  # 空转轮询加速
+        workers = [make_worker(f"FAKE-C{i}", tmp_cfg, accounts, results)[0]
+                   for i in range(3)]
 
-        # → FOLLOWING → DM_SEND → COMPLETED
-        fsm.transition(FSMState.FOLLOWING)
-        fsm.transition(FSMState.DM_SEND)
-        fsm.mark_completed()
-        assert fsm.state == FSMState.COMPLETED
+        deadline = time.time() + 15
 
-    def test_fsm_no_likes_delete_retry(self):
-        """验证无点赞→删除→重发流程"""
-        from comment_bot.fsm import CommentFSM, CommentTask, FSMState
+        def drive(w):
+            while time.time() < deadline:
+                w._tick()
 
-        task = CommentTask(video_id="v2", copywriting="test")
-        fsm = CommentFSM(task)
-        fsm.transition(FSMState.POSTING)
-        fsm.mark_posted()
-        fsm.check_likes(has_likes=False)
-        assert fsm.state == FSMState.DELETING
-        fsm.mark_deleted()
-        assert fsm.state == FSMState.PENDING
-        assert fsm.delete_count == 1
+        threads = [threading.Thread(target=drive, args=(w,), daemon=True)
+                   for w in workers]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
 
-    def test_fsm_retry_limit(self):
-        """验证发布失败重试上限"""
-        from comment_bot.fsm import CommentFSM, CommentTask, FSMState
+        assert accounts.stats()["SUCCESS"] == 6
+        rows = results.list()
+        assert len(rows) == 6
+        # 每 (账号, 设备) 对唯一 — 并发下不可能两台设备执行同一账号
+        executed = {(r["account_id"], r["device_serial"]) for r in rows}
+        assert len(executed) == 6
+        # 结果记录中的设备与账号最终绑定设备一致
+        for r in rows:
+            acc = accounts.get(r["account_id"])
+            assert acc.device_serial == r["device_serial"]
 
-        task = CommentTask(video_id="v3", copywriting="test")
-        fsm = CommentFSM(task)
-        for _ in range(3):
-            fsm.transition(FSMState.POSTING)
-            fsm.mark_post_failed()
-        assert fsm.state == FSMState.FAILED
-        assert fsm.retry_count == 3
+    def test_cold_start_does_not_false_alarm_app_crash(self, tmp_cfg, repos):
+        """冷启动回归: 进入 START_GAME 时游戏进程尚不存在属正常, watchdog
+        巡检不得在 launch 执行前误报 APP_CRASHED 进 RECOVERY
+        (真机首跑 7s 即误入, 每个账号白耗一次 Level 5 重启)"""
+        accounts, results = repos
+        accounts.add("user001", "p")
+        tmp_cfg.game["package"] = "fake.game.pkg"  # 空包会跳过 pidof 巡检
+        adb = FakeAdb()
+        running = {"v": False}
+        adb.pidof = lambda serial, package: 12345 if running["v"] else 0
 
-    def test_scheduler_priority(self):
-        """验证调度器优先级排序"""
-        from comment_bot.fsm import CommentFSM, CommentTask, FSMState
-        from comment_bot.scheduler import TaskScheduler
+        class ColdStartAutomation(ScriptedAutomation):
+            def launch(self):
+                running["v"] = True  # 模拟 launch 后进程出现
+                return super().launch()
 
-        sched = TaskScheduler(max_active=5)
+        w, _ = make_worker("FAKE-COLD", tmp_cfg, accounts, results,
+                           automation_cls=ColdStartAutomation,
+                           device_manager=FakeDeviceManager(adb=adb))
+        for _ in range(5):
+            w._tick()
 
-        # 添加 PENDING 任务 (P2)
-        task_low = CommentTask(video_id="low", copywriting="low", image_paths=[])
-        fsm_low = CommentFSM(task_low)
-        sched.enqueue(fsm_low)
+        states = [s for s, _ in w.fsm.history]
+        assert WorkerState.RECOVERY not in states  # 全程未误入恢复
+        # launch 已执行且流水线正常推进(登录甚至已完成)
+        assert "launch" in w.automation.calls
+        assert w.fsm.state in (WorkerState.DETECT_PAGE, WorkerState.LOGIN,
+                               WorkerState.WAIT_HOME, WorkerState.HANDLE_POPUPS)
 
-        # 添加 REPLYING 任务 (P0)
-        task_high = CommentTask(video_id="high", copywriting="high", image_paths=[])
-        fsm_high = CommentFSM(task_high)
-        fsm_high.transition(FSMState.POSTING)
-        fsm_high.mark_posted()
-        fsm_high.check_likes(has_likes=True)
-        fsm_high.check_replies(has_replies=True)
-        sched.enqueue(fsm_high)
+    def test_task_failure_releases_account_and_moves_on(self, tmp_cfg, repos):
+        """回归: 任务失败标记 RETRY/FAILED 后必须释放账号并领取下一个
+        (真机曾同一账号无限重跑任务, retry_count 烧到 9 才被硬预算救出)"""
+        accounts, results = repos
+        accounts.add("user001", "p")
+        accounts.add("user002", "p")
 
-        ready = sched.get_ready_task()
-        assert ready.task.video_id == "high"  # P0 优先
+        class FailingTaskAutomation(ScriptedAutomation):
+            def execute_task(self, account):
+                return TaskOutcome(False, "OPEN_MAIN_MENU", "无法打开主菜单")
 
-    def test_interrupt_pause_resume(self):
-        """验证中断控制器暂停恢复"""
-        from comment_bot.interrupt import InterruptController, BotState
+        w, _ = make_worker("FAKE-FAIL", tmp_cfg, accounts, results,
+                           automation_cls=FailingTaskAutomation)
+        for _ in range(60):
+            w._tick()
+            if accounts.get_by_account("user002").status == AccountStatus.RETRY:
+                break
 
-        ic = InterruptController()
-        assert ic.is_running
+        a1 = accounts.get_by_account("user001")
+        a2 = accounts.get_by_account("user002")
+        assert a1.status == AccountStatus.RETRY
+        assert a1.retry_count == 1          # 每个账号只烧一次重试
+        assert a2.status == AccountStatus.RETRY  # 第二个账号正常被领取并失败
+        assert a2.retry_count == 1
+        assert len(results.list()) == 2     # 每账号一条结果, 不重复落库
 
-        ic.pause()
-        assert ic.is_paused
+    def test_residual_session_logs_out_before_login(self, tmp_cfg, repos):
+        """回归: 异常中断后游戏残留上一账号的 HOME 会话 — 新账号周期必须
+        先登出再走 LOGIN, 绝不能跳过登录直接执行任务(真机曾 Rk*** 周期
+        无 LOGIN 状态, 任务归属错乱)"""
+        accounts, results = repos
+        accounts.add("user001", "p")
 
-        time.sleep(0.05)
-        duration = ic.resume()
-        assert duration > 0
-        assert ic.is_running
+        class ResidualSessionAutomation(ScriptedAutomation):
+            def __init__(self, serial=""):
+                super().__init__(serial)
+                self.residual = True
 
-        ic.stop()
-        assert ic.state == BotState.STOPPED
+            def detect_page(self):
+                self.calls.append("detect_page")
+                if self.residual:
+                    return PageState.HOME  # 残留会话: 未登录就已在 HOME
+                return PageState.HOME if self.login_done else PageState.LOGIN
 
-    def test_interrupt_time_compensation(self):
-        """验证时间补偿计算"""
-        from comment_bot.interrupt import InterruptController
+            def logout(self):
+                self.calls.append("logout")
+                self.residual = False       # 登出后残留会话消失
+                return True
 
-        tasks = {
-            "v1": {"remaining": 300},  # 剩余 5 分钟
-            "v2": {"remaining": 30},   # 剩余 30 秒
-            "v3": {"remaining": 600},  # 剩余 10 分钟
-        }
-        immediate, delayed = InterruptController.compute_compensation(
-            tasks, pause_duration=60
-        )
-        assert "v2" in immediate  # 30-60 < 0
-        assert "v1" in delayed and delayed["v1"] == 240
-        assert "v3" in delayed and delayed["v3"] == 540
+        w, _ = make_worker("FAKE-RESID", tmp_cfg, accounts, results,
+                           automation_cls=ResidualSessionAutomation)
+        for _ in range(30):
+            w._tick()
+            if accounts.get_by_account("user001").status == AccountStatus.SUCCESS:
+                break
 
-    def test_persistence_roundtrip(self):
-        """验证 SQLite 持久化往返"""
-        from comment_bot.fsm import CommentFSM, CommentTask, FSMState
-        from comment_bot.persistence import StateDB
+        assert accounts.get_by_account("user001").status == AccountStatus.SUCCESS
+        calls = w.automation.calls
+        login_i = next(i for i, c in enumerate(calls)
+                       if c.startswith("login:"))
+        assert "logout" in calls[:login_i]   # 先登出残留会话
+        assert "execute_task" in calls       # 之后才执行任务
+        assert calls.index("execute_task") > login_i
+        assert calls.count("execute_task") == 1
 
-        fd, path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
+    def test_residual_session_reset_bounded(self, tmp_cfg, repos):
+        """残留会话登出失败有上限: 2 次后释放账号, 不死循环"""
+        accounts, results = repos
+        accounts.add("user001", "p")
 
-        db = StateDB(path)
-        task = CommentTask(video_id="v_test", copywriting="hello",
-                           image_paths=["a.jpg", "b.jpg"])
-        fsm = CommentFSM(task)
-        fsm.transition(FSMState.POSTING)
-        fsm.mark_posted()
-        db.save(fsm)
+        class StickySessionAutomation(ScriptedAutomation):
+            def detect_page(self):
+                self.calls.append("detect_page")
+                return PageState.HOME  # 登出无效, 始终残留 HOME
 
-        loaded = db.load("v_test")
-        assert loaded is not None
-        assert loaded.task.video_id == "v_test"
-        assert loaded.state == FSMState.WAITING_LIKE
-        assert loaded.task.image_paths == ["a.jpg", "b.jpg"]
+        w, _ = make_worker("FAKE-STICKY", tmp_cfg, accounts, results,
+                           automation_cls=StickySessionAutomation)
+        for _ in range(20):
+            w._tick()
+            if accounts.get_by_account("user001").status == AccountStatus.RETRY:
+                break
 
-        db.delete("v_test")
-        assert db.load("v_test") is None
-        db.close()
-        os.unlink(path)
+        acc = accounts.get_by_account("user001")
+        assert acc.status == AccountStatus.RETRY
+        assert "SESSION_RESET_FAILED" in acc.last_error
+        assert acc.retry_count == 1
+        assert w.automation.calls.count("logout") == 2  # 恰好 2 次, 有界
+        assert w.account is None
 
-    def test_materials_pick(self):
-        """验证素材管理器选取"""
-        from comment_bot.materials import MaterialManager
+    def test_login_timeout_retry_skips_game_restart(self, tmp_cfg, repos):
+        """回归: 登录 TIMEOUT 重试不得冷重启游戏 — 只暖拉回游戏(launch)再
+        重走 DETECT_PAGE→LOGIN。真机曾 TIMEOUT 后冷重启 + 看门狗误杀 +
+        冷却 6 分钟卡在选号页; 也实测过只重检测时外部浏览器挡屏导致
+        DETECT_PAGE 死循环"""
+        accounts, results = repos
+        accounts.add("user001", "p")
 
-        fd, path = tempfile.mkstemp(suffix=".xlsx")
-        os.close(fd)
+        class FlakyLoginAutomation(ScriptedAutomation):
+            def __init__(self, serial=""):
+                super().__init__(serial)
+                self.login_attempts = 0
+                self.restarts = 0
 
-        mm = MaterialManager(path)
-        cw = mm.pick_copywriting()
-        assert cw is not None
-        assert len(cw["content"]) > 0
+            def login(self, account):
+                self.calls.append(f"login:{account.masked()}")
+                self.login_attempts += 1
+                if self.login_attempts < 3:
+                    return LoginResult.TIMEOUT
+                self.login_done = True
+                return LoginResult.SUCCESS
 
-        pair = mm.pick_image_pair()
-        assert pair is not None
+            def restart(self):
+                self.restarts += 1
+                self.calls.append("restart")
+                return True
 
-        dm = mm.pick_dm("默认")
-        assert len(dm) > 0
+        w, _ = make_worker("FAKE-FLAKY", tmp_cfg, accounts, results,
+                           automation_cls=FlakyLoginAutomation)
+        for _ in range(40):
+            w._tick()
+            if accounts.get_by_account("user001").status == AccountStatus.SUCCESS:
+                break
 
-        reply = mm.pick_reply("怎么治的")
-        assert reply is not None
+        assert accounts.get_by_account("user001").status == AccountStatus.SUCCESS
+        assert w.automation.login_attempts == 3     # 重试直到成功
+        assert w.automation.restarts == 0           # TIMEOUT 重试不冷重启
+        assert w.automation.calls.count("launch") >= 3   # 每次 TIMEOUT 重试暖拉回游戏
+        assert w.automation.calls.count("execute_task") == 1
 
-        # 无匹配关键词 → 默认表情包
-        fallback = mm.pick_reply("完全不相关的问题")
-        assert fallback is not None
+    def test_worker_wires_heartbeat_into_automation(self, tmp_cfg, repos):
+        """回归: Worker 构建自动化后必须注入心跳回调(长等待循环刷新用),
+        否则登录阻塞 >90s 被调度器误判 WORKER_STALLED 重建"""
+        accounts, results = repos
+        accounts.add("user001", "p")
 
-        os.unlink(path)
+        class HeartbeatTarget:
+            heartbeat_cb = None
 
-    def test_filter_freshness(self):
-        """验证视频筛选器时效计算"""
-        from comment_bot.filter import VideoFilter
+        class WiredAutomation(ScriptedAutomation):
+            def __init__(self, serial=""):
+                super().__init__(serial)
+                self.web = HeartbeatTarget()
+                self.detector = HeartbeatTarget()
 
-        vf = VideoFilter(
-            exclude_keywords=["白癜风"],
-            target_keywords=["白斑", "美白"],
-        )
+        w, _ = make_worker("FAKE-WIRE", tmp_cfg, accounts, results,
+                           automation_cls=WiredAutomation)
+        for _ in range(10):
+            w._tick()
+            if w.automation is not None:
+                break
 
-        # 全新鲜
-        assert vf.calc_freshness_score([0, 1, 2, 3]) > 0.8
+        assert w.automation is not None
+        assert callable(w.automation.heartbeat_cb)
+        assert callable(w.automation.web.heartbeat_cb)
+        assert callable(w.automation.detector.heartbeat_cb)
+        before = w.last_action_ts
+        time.sleep(0.02)
+        w.automation.web.heartbeat_cb()          # 回调应刷新心跳时间戳
+        assert w.last_action_ts >= before
 
-        # 全旧
-        assert vf.calc_freshness_score([30, 60, 120]) == 0.0
+    def test_run_defaults_to_pokemon_go(self, tmp_cfg, repos):
+        """回归: 裸 `python main.py run` 必须加载 pokemon_go 而不是旧
+        douyin 模板(game.yaml)。真机曾漏 --game 把抖音当目标游戏跑"""
+        import main
+        from core.config import ControlConfig
+        args = main.build_parser().parse_args(["run"])
+        assert args.game == "pokemon_go"
+        ControlConfig.reset()
+        try:
+            cfg = ControlConfig.load(game_name=args.game or None)
+            assert cfg.game_name == "pokemon_go"
+            assert cfg.game.get("package") == "com.nianticlabs.pokemongo"
+        finally:
+            ControlConfig.reset()  # 单例复位, 不污染其他测试
 
-        # 混合
-        score = vf.calc_freshness_score([2] * 10 + [10] * 5 + [20] * 5)
-        expected = 0.5 * 0.6 + 0.75 * 0.4
-        assert abs(score - expected) < 0.01
+    def test_config_error_fails_account_without_retry(self, tmp_cfg, repos):
+        """选择器未标定(配置缺失) → 立即 FAILED, 不重试、不烧时间"""
+        accounts, results = repos
+        accounts.add("user001", "p")
+        w, stop = make_worker("FAKE-INT-2", tmp_cfg, accounts, results,
+                              automation_cls=BrokenAutomation)
+        t = threading.Thread(target=w.run, daemon=True)
+        t.start()
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            acc = accounts.get_by_account("user001")
+            if acc.status == AccountStatus.FAILED:
+                break
+            time.sleep(0.05)
+        stop.set()
+        t.join(timeout=10)
 
-    def test_ocr_time_parsing(self):
-        """验证时间戳解析"""
-        from douyin_core.ocr_engine import parse_comment_time
+        acc = accounts.get_by_account("user001")
+        assert acc.status == AccountStatus.FAILED
+        assert "选择器未配置" in acc.last_error
+        rows = results.list()
+        assert len(rows) == 1
+        assert rows[0]["state"] == TaskRunState.FAILED.value
+        assert rows[0]["failed_step"] == "CONFIG"
 
-        assert parse_comment_time("刚刚") == 0
-        assert parse_comment_time("3分钟前") == 3
-        assert parse_comment_time("15分钟前") == 15
-        assert parse_comment_time("2小时前") == 120
-        assert parse_comment_time("3天前") == 4320
-        assert parse_comment_time("30秒前") == 0
-        assert parse_comment_time("乱码文本") == 99999
+    def test_time_budget_releases_device(self, tmp_cfg, repos):
+        """坏账号超过硬预算 → RETRY 并释放设备, 不拖死吞吐"""
+        accounts, results = repos
+        accounts.add("user001", "p")
+        tmp_cfg.system["performance"] = {
+            "soft_account_timeout": 0.05, "hard_account_timeout": 0.1}
+        w, _ = make_worker("FAKE-INT-3", tmp_cfg, accounts, results)
+        w._claim_next()
+        time.sleep(0.3)
+        w._tick()  # 预算检查 → 超时 → RETRY + 释放
 
-    def test_config_values(self):
-        """验证关键配置值"""
-        from douyin_core import config
+        acc = accounts.get_by_account("user001")
+        assert acc.status == AccountStatus.RETRY
+        assert "TIME_BUDGET_EXCEEDED" in acc.last_error
+        assert w.account is None
+        rows = results.list()
+        assert len(rows) == 1 and rows[0]["state"] == TaskRunState.FAILED.value
 
-        assert config.LIKE_WAIT_SEC == 300
-        assert config.REPLY_WAIT_SEC == 900
-        assert config.DM_DELAY_SEC == 60
-        assert config.POST_RETRY_COUNT == 3
-        assert config.MAX_ACTIVE_TASKS == 10
-        assert config.FRESHNESS_THRESHOLD == 0.3
-        assert len(config.VIDEO_EXCLUDE_KEYWORDS) > 0
-        assert len(config.VIDEO_TARGET_KEYWORDS) > 0
 
-    def test_main_import_and_bot_creation(self):
-        """验证主入口类和 bot 实例化"""
-        from comment_bot.main import CommentBot
+class TestPaymentSafety:
+    def test_payment_dry_run_blocks_click_payment(self):
+        """默认 dry_run: 真实支付动作被拦截, 返回失败而非执行"""
+        executor = ActionExecutor(None, None)
+        result = executor.execute({"action": "click_payment",
+                                   "text": "确认支付"})
+        assert not result.ok
+        assert "dry_run 拦截" in result.detail
+        assert "确认支付" in result.detail
 
-        bot = CommentBot(no_dashboard=True, test_mode=True)
-        assert bot.test_mode is True
-        assert bot.no_dashboard is True
-        assert bot.scheduler is not None
-        assert bot.interrupt is not None
-        assert bot.materials is not None
-        assert bot.filter is not None
-        assert bot.db is not None
+    def test_payment_allowed_passes_guard(self):
+        """明确授权后护栏放行(此时才真正尝试点击支付按钮)"""
+        executor = ActionExecutor(None, None)
+        executor.payment_allowed = True
+        result = executor.execute({"action": "click_payment"})
+        assert not result.ok  # 无 matcher/控件, 但失败原因不再是护栏
+        assert "dry_run 拦截" not in result.detail
 
-    def test_dashboard_app(self):
-        """验证 Dashboard Flask 应用"""
-        from comment_bot.dashboard import app
-        assert app is not None
-        # 验证路由
-        with app.test_client() as client:
-            resp = client.get("/")
-            assert resp.status_code == 200
+    def test_payment_double_switch_requires_env(self, tmp_cfg, monkeypatch):
+        """双重开关: dry_run=false 且 .env 明确授权才放行, 缺一不可"""
+        assert tmp_cfg.payment_dry_run          # 默认禁止
+        assert not tmp_cfg.payment_allowed
+        tmp_cfg.system["payment"] = {"dry_run": False}
+        monkeypatch.delenv("CONTROL_CENTER_ALLOW_PAYMENT", raising=False)
+        assert not tmp_cfg.payment_allowed      # 配置开但环境变量缺
+        monkeypatch.setenv("CONTROL_CENTER_ALLOW_PAYMENT", "1")
+        assert tmp_cfg.payment_allowed
+
+    def test_confirm_payment_raises_without_authorization(self, tmp_cfg):
+        """BaseGameAutomation.confirm_payment 未授权时直接抛异常"""
+        auto = BaseGameAutomation.__new__(BaseGameAutomation)
+        auto.cfg = tmp_cfg
+        with pytest.raises(PaymentBlockedError):
+            auto.confirm_payment(product="礼包", amount="30")
+
+
+class TestResultExport:
+    def test_result_export_roundtrip(self, repos, tmp_path):
+        """结果导出 Excel — 账号脱敏、状态正确"""
+        accounts, results = repos
+        acc_id = accounts.add("13800138000", "p")
+        r = TaskResult(account_id=acc_id, account="13800138000",
+                       device_serial="DEV1", state=TaskRunState.SUCCESS,
+                       started_at=time.time() - 5, finished_at=time.time())
+        results.save(r)
+        out = results.export_xlsx(tmp_path / "results.xlsx")
+
+        import pandas as pd
+        df = pd.read_excel(out)
+        assert len(df) == 1
+        assert "13800138000" not in str(df["account"].iloc[0])
+        assert "***" in str(df["account"].iloc[0])
+        assert df["state"].iloc[0] == "SUCCESS"

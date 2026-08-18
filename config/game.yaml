@@ -1,0 +1,111 @@
+# ============================================================
+# 游戏适配配置 — game.yaml (当前适配: 抖音 Douyin)
+#
+# 切换到其他游戏:
+#   1. 修改 adapter / package / activity
+#   2. 按真实 UI dump 标定 pages / popups / login / logout / steps
+#   3. 新增 automation/<your_game>.py 并注册到 automation/__init__.ADAPTERS
+#
+# UNKNOWN_SELECTOR 约定:
+#   未标定的选择器一律留 null — 运行时明确报错, 绝不瞎猜。
+#   标定方法见 automation/target_game.py 顶部注释与 README「页面标定」章节。
+# ============================================================
+
+adapter: douyin
+package: com.ss.android.ugc.aweme
+activity: com.ss.android.ugc.aweme.splash.SplashActivity
+
+# 图像模板匹配
+image:
+  threshold: 0.8
+
+# 步骤执行节奏(秒)
+automation:
+  step_interval: 1
+  screenshot_interval: 2
+
+# ── 页面识别规则 ─────────────────────────────────────────────
+# 检测顺序 = 本段定义顺序, 命中即返回。先特殊后通用。
+# 规则字段: texts / descs / resource_ids / templates / ocr_keywords
+# requires_all: true 时需全部命中(默认任意一条命中即匹配)
+pages:
+  LOGIN:
+    # 抖音登录页(未登录时出现): 密码登录 / 手机号快捷登录
+    texts: ["密码登录", "手机号快捷登录", "手机号登录"]
+  NETWORK_ERROR:
+    texts: ["网络连接失败", "加载失败", "网络异常", "请检查网络"]
+  UPDATE_DIALOG:
+    texts: ["发现新版本", "立即更新"]
+  SPLASH:
+    # 模板需自行制作: templates/game/splash.png
+    templates: ["splash"]
+  HOME:
+    # 抖音首页: 底部 Tab(文本来自本仓库已实测验证的 UI 层级)
+    texts: ["首页", "朋友", "消息", "我"]
+    descs: ["搜索"]
+  TASK_SUCCESS:
+    texts: ["发布成功", "已完成", "任务完成"]
+  LOGOUT:
+    texts: ["确认退出", "退出登录"]
+
+# ── 弹窗处理 ─────────────────────────────────────────────────
+# match: 判定条件(text/desc/resource_id/template 任一命中)
+# close: 依次执行直到成功; 建议最后放 press_key back 兜底
+popups:
+  update_dialog:
+    match: {text: "立即更新"}
+    close:
+      - {action: press_key, key: back}
+  announcement:
+    match: {text: "我知道了"}
+    close:
+      - {action: click_text, text: "我知道了"}
+      - {action: press_key, key: back}
+  permission_dialog:
+    # 系统权限弹窗(存储/相册等) — 自动化自己的设备, 允许授权
+    match: {text: "允许"}
+    close:
+      - {action: click_text, text: "允许"}
+      - {action: press_key, key: back}
+
+# ── 登录流程 ─────────────────────────────────────────────────
+# ⚠️ 以下选择器需要「未登录状态」的真实登录页才能标定。
+#    当前真机已登录抖音, 登录步骤会自动跳过(检测到 HOME)。
+#    标定: 退出登录后运行 `python scripts/dump_hierarchy.py <serial>`,
+#    在 XML 中找输入框/按钮的 text 或 resource-id 填到这里。
+login:
+  entry: []                      # 从其他页面进入登录页的动作(可选)
+  account_input: null            # UNKNOWN_SELECTOR — 如 {text: "请输入手机号"}
+  password_input: null           # UNKNOWN_SELECTOR — 如 {text: "请输入密码"}
+  login_button: null             # UNKNOWN_SELECTOR — 如 {text: "登录"}
+  error_texts:
+    wrong_password: ["密码错误", "密码不正确", "账号或密码错误"]
+    account_error: ["账号异常", "账号不存在", "账号已被封禁"]
+
+# ── 退出登录流程 ─────────────────────────────────────────────
+# 抖音: 我 → 设置 → 退出登录 → 确认退出 (文本为本仓库实测经验值, 版本更新后需复核)
+logout:
+  entry:
+    - {action: click_text, text: "我", timeout: 5}
+    - {action: click_text, text: "设置", timeout: 5}
+  confirm:
+    - {action: click_text, text: "退出登录", timeout: 5}
+    - {action: click_text, text: "确认退出", timeout: 5}
+    - {action: press_key, key: back}
+
+# ── 游戏任务步骤 ─────────────────────────────────────────────
+# 示例任务(真实可执行): 首页 → 打开搜索 → 返回首页
+# 换成真实游戏任务时, 按此格式配置, 或覆写 automation 子类的 execute_task()
+steps:
+  - {action: wait_page, page: HOME, timeout: 30}
+  - {action: handle_popups, max_rounds: 2}
+  - {action: click_desc, desc: "搜索", timeout: 10}
+  - {action: wait, seconds: 2}
+  - {action: press_key, key: back}
+  - {action: wait_page, page: HOME, timeout: 15}
+
+# ── 任务结果验证 ─────────────────────────────────────────────
+# 支持: text / image / page 三种方式(可同时配置, 全部通过才算成功)
+verify:
+  page: HOME
+  timeout: 15

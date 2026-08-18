@@ -17,7 +17,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies (core only, skip heavy AI)
         run: |
@@ -38,3 +38,15 @@ jobs:
               print(f'  OK: {mod}')
           print('All imports OK')
           "
+
+      - name: Install control-center deps
+        run: |
+          pip install pandas>=2.0.0 PyYAML>=6.0 python-dotenv fastapi uvicorn requests
+
+      - name: Control center unit tests (mock ADB, no real device)
+        run: |
+          python -m pytest tests/test_coordinate_mapper.py tests/test_image_matcher.py tests/test_state_machine.py tests/test_account_queue.py tests/test_device_manager.py -q
+
+      - name: Douyin bot tests
+        run: |
+          python -m pytest tests/test_integration.py -q

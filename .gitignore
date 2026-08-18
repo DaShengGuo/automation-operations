@@ -32,6 +32,25 @@ desktop.ini
 *.p12
 *.pfx
 
+# Control center venv
+.venv-control/
+
+# Sensitive user data — NEVER commit
+data/private/
+data/accounts.*
+data/runtime.db
+data/runtime.db-journal
+data/runtime.db-wal
+data/runtime.db-shm
+data/results_*.xlsx
+data/device_compat_report.md
+data/ui_*.xml
+data/inspect/
+data/*.db
+
+# Control center runtime artifacts
+screenshots/
+
 # Runtime data (auto-generated)
 data/screenshots/*.png
 data/screenshots/*.jpg
@@ -75,6 +94,12 @@ temp/
 *.zip
 *.7z
 *.rar
+
+# Release installers (large binaries; kept out of git, rebuilt from tag)
+release/
+
+# Root-level runtime SQLite
+/runtime.db
 
 # Node (if added later)
 node_modules/

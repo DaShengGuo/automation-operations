@@ -1,0 +1,92 @@
+# ============================================================
+# 中控系统配置 — config.yaml
+# ============================================================
+
+workers:
+  max: 4                # 最大并发设备数 (python main.py run --workers 可覆盖)
+
+# 账号领取轮询间隔(秒)
+poll_interval: 5
+
+# 账号来源:
+#   留空/不配置 = 手动导入(import-accounts 或 POST /api/accounts)
+#   "qq_ui"     = 队列为空时, 每台设备从自己手机上已登录的 QQ 群读取
+#                 (群聊上一条消息=账号, 下一条=密码; 已导入账号自动去重)
+account_provider: qq_ui
+account_provider_qq_group: 游戏自动化购买
+
+# 测试循环: 每个账号执行成功后自动重置为 PENDING 再跑, 共 N 轮。
+# 0 = 关闭(生产必须为 0)。用于多账号来回循环测试。
+test_cycles: 3
+
+# ── 生产性能与恢复预算 ──────────────────────────────────────
+# 账号时间预算: 坏账号不拖死设备(吞吐量保护)
+# soft: 超时提示 SLOW_ACCOUNT; hard: 超时终止并释放设备
+# 预算依据真机实测(2026-08-15/16 冷启动):
+#   游戏冷启动 72s + 页面检测 27s + 登录 ~45s + 冷地图加载 148s+
+#   + 商店任务 ~60s + 退出 ~30s ≈ 380s+。
+#   2026-08-16 run 10 实测: 坏路径(无法登入弹窗卡住)336s 被杀 —
+#   修复弹窗后快乐路径亦超 300s, 硬预算会杀掉成功流程, 故 hard 上调。
+#   原 60s/账号吞吐目标实测不可达(纯游戏冷启动就 72s), 如实记录。
+performance:
+  target_account_seconds: 420
+  soft_account_timeout: 300
+  hard_account_timeout: 480
+  worker_heartbeat_timeout: 90   # worker 线程心跳停止判定(秒)
+  retry_cooldown_seconds: 120    # 失败账号冷却(先处理正常账号)
+
+# 恢复预算(单账号): 超预算立即截图/释放, 不无限重试
+recovery:
+  local_retry: 2
+  navigation_retry: 2
+  app_restart: 1
+  account_retry: 1
+
+# 诊断输出(生产降噪): errors_and_key_states = 仅错误+关键节点截图
+diagnostics:
+  screenshot_mode: errors_and_key_states
+
+# 卡在 LOCKED/RUNNING 的账号恢复
+stale_recover_minutes: 10    # 超过该分钟数视为卡死
+stale_recover_interval: 60   # 清扫周期(秒)
+
+# 是否执行退出登录流程(false 时只停止应用)
+logout_required: true
+
+# 各状态最大等待时间(秒) — 超时进入 RECOVERY
+timeouts:
+  check_device: 60
+  launch: 60
+  detect_page: 60
+  login: 90
+  home: 120
+  popup: 15
+  task: 180
+  verify: 60
+  logout: 30
+  cleanup: 15
+  recovery: 60
+  next_account: 15
+
+# 重试次数
+retries:
+  login: 3              # 登录网络类失败重试
+  task: 2               # 任务执行失败重试
+  restart: 3            # APP 最大重启次数
+  watchdog: 5           # 每个恢复等级最大尝试次数
+  account_max: 3        # 账号最大失败重试次数
+
+# ── 支付安全(默认禁止真实支付) ──
+# dry_run=true:  自动化只读取商品信息, 绝不点击真实支付确认
+# dry_run=false: 仍需 .env 中 CONTROL_CENTER_ALLOW_PAYMENT=1 才会放行
+payment:
+  dry_run: true
+
+# Web 中控后台
+api:
+  host: 127.0.0.1
+  port: 8900
+
+# 日志
+logging:
+  level: INFO
