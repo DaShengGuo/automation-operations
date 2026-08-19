@@ -32,8 +32,11 @@
   BROWSER_DATA/DETECTED_STATE/RESULT/STEP/ERROR/DETAIL)
 - 测试: `tests/test_device_reset.py` 17 条(Worker 停止/DEVICE_RESET
   原因/预取释放/检查点单设备清理/浏览器三态/失败详情/历史保留/
-  控制器防重复防离线), 全量 258 条通过。真机测试待交付设备就绪后
-  按规格 §18 单独执行
+  控制器防重复防离线), 全量 258 条通过。真机验收已执行:
+  Redmi M2012K11AC(Android 13) 单机全流程 PASS(pm clear → 重连/
+  重初始化 7 PASS + 1 WARN → 真实页面检测 PTC_REDIRECTING →
+  READY; device_reset.log RESULT=SUCCESS), 见
+  FINAL_RELEASE_ACCEPTANCE_v1.1.0 §C。多机并发重置仍待三机环境
 
 ---
 
