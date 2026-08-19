@@ -20,13 +20,18 @@ from models.device import DeviceStatus
 from storage.database import Database
 from storage.repositories import AccountRepository, TaskResultRepository
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from core.account_queues import ManualDeviceQueueManager
+
 logger = logging.getLogger(__name__)
 
 
 class TaskScheduler:
     """中控调度器：唯一入口，CLI/API 都通过它控制"""
 
-    def __init__(self, cfg: ControlConfig = None):
+    def __init__(self, cfg: ControlConfig = None,
+                 queue_manager: Optional["ManualDeviceQueueManager"] = None):
         self.cfg = cfg or ControlConfig.load()
         self.adb_db = Database(self.cfg.db_path)
         self.accounts = AccountRepository(
@@ -34,6 +39,9 @@ class TaskScheduler:
             stale_minutes=float(self.cfg.get("stale_recover_minutes", 10)))
         self.results = TaskResultRepository(self.adb_db)
         self.devices = DeviceManager(self.cfg)
+        # 人工账号队列(v1.2.0): 提供时 Worker 走队列模式, 账号不落
+        # SQLite accounts 表(历史记录仍写 task_results)
+        self.queue_manager = queue_manager
 
         self._workers: dict[str, DeviceWorker] = {}
         self._runtimes: dict[str, WorkerRuntime] = {}
@@ -113,10 +121,17 @@ class TaskScheduler:
     def _spawn_worker(self, serial: str, prefetched_account=None):
         runtime = WorkerRuntime(serial=serial)
         self._runtimes[serial] = runtime
+        queue = registry = None
+        if self.queue_manager is not None:
+            # 队列模式: Worker 直接从本设备队列取号(断线重连后仍是
+            # 同一队列实例 — 队列以 serial 为 Key 常驻内存)
+            queue = self.queue_manager.queue_for(serial)
+            registry = self.queue_manager.execution_registry
         worker = DeviceWorker(serial, self.cfg, self.devices, self.accounts,
                               self.results, self._automation_factory,
                               self._stop_event, self._pause_event, runtime,
-                              prefetched_account=prefetched_account)
+                              prefetched_account=prefetched_account,
+                              queue=queue, execution_registry=registry)
         self._workers[serial] = worker
         worker.start()
         logger.info(f"[调度器] Worker 已启动: {serial}")
@@ -197,7 +212,9 @@ class TaskScheduler:
             if not report.passed:
                 return {"ok": False, "error": device.init_error}
             prefetched = None
-            if account_id is not None:
+            if account_id is not None and self.queue_manager is None:
+                # 仅 SQLite 模式支持确定性领取; 队列模式由 INTERRUPTED
+                # 队首任务自然优先恢复(停止后继续, 第 27 节)
                 prefetched = self.accounts.claim_specific(account_id, serial)
                 if prefetched is None:
                     return {"ok": False,
@@ -272,6 +289,23 @@ class TaskScheduler:
             # 以 Worker 线程存活为准: stop()/stop_device() 清掉 _workers 后,
             # 残留的 runtime 状态不得再被报为「运行中」(否则 GUI 计数永不归零)
             alive = d.serial in self._workers
+            # 队列块(独立于 Worker 存活: 停止后待执行队列保留, 第 27 节)
+            queue_block = None
+            if self.queue_manager is not None:
+                q = self.queue_manager.get(d.serial)
+                if q is not None:
+                    qs = q.snapshot()
+                    queue_block = {
+                        "pending_total": qs["pending_total"],
+                        "waiting": qs["waiting"],
+                        "retry": qs["retry"],
+                        "interrupted": qs["interrupted"],
+                        "success": qs["success"],
+                        "failed": qs["failed"],
+                    }
+            elapsed = 0.0
+            if rt is not None and alive and rt.account_started_at:
+                elapsed = round(time.time() - rt.account_started_at, 1)
             devices.append({
                 "serial": d.serial,
                 "model": d.model or "-",
@@ -280,10 +314,12 @@ class TaskScheduler:
                 "worker_state": rt.state if rt and alive else "-",
                 "page": rt.page if rt and alive else "-",
                 "account": rt.account if rt and alive else "",
+                "account_elapsed": elapsed,
                 "error": rt.error if rt and alive else d.init_error,
                 "success_count": rt.success_count if rt and alive else 0,
                 "fail_count": rt.fail_count if rt and alive else 0,
                 "last_duration": rt.last_duration if rt and alive else 0,
+                "queue": queue_block,
             })
         account_stats = self.accounts.stats()
         # 吞吐量统计(每设备 + 总览)

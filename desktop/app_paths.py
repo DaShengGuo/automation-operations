@@ -8,7 +8,7 @@ AppPaths — 客户数据目录统一管理。
 
 客户数据(可写, 升级/卸载不删除):
   %LOCALAPPDATA%\\PokemonAutomation\\
-  ├─ config\\      客户配置(群聊名/账号来源等)
+  ├─ config\\      客户配置(账号来源等; 旧 QQ 群字段静默兼容)
   ├─ database\\    SQLite(runtime.db + 历史)
   ├─ logs\\        运行日志(append, 不覆盖)
   ├─ screenshots\\ 错误截图/关键帧

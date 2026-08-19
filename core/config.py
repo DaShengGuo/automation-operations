@@ -205,13 +205,14 @@ class ControlConfig:
 
     @property
     def account_provider(self) -> str:
-        """账号来源: 空=手动导入(Excel/CSV/HTTP); 'qq_ui'=从本机 QQ 群读取"""
+        """账号来源: 'manual_queue'=人工按设备队列(v1.2.0 默认);
+        空=手动导入(Excel/CSV/HTTP)。旧值 'qq_ui' 不再有生产入口。"""
         return str(self.system.get("account_provider", ""))
 
     @property
     def qq_group_name(self) -> str:
-        return str(self.system.get("account_provider_qq_group",
-                                   "游戏自动化购买"))
+        """旧 QQ 群取号配置(v1.2.0 起仅为遗留字段, 无生产用途)。"""
+        return str(self.system.get("account_provider_qq_group", ""))
 
     # ── 游戏配置 ──
 

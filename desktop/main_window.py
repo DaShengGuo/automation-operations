@@ -12,15 +12,17 @@ import time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QGridLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QGroupBox, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
 
-from desktop.controller import CHAT_SOURCES, DesktopAppController
+from desktop.controller import DesktopAppController
 from desktop.runtime_state import ApplicationRunState
 from desktop.state_registry import PokemonStateRegistry
+from desktop.widgets.batch_dialog import BatchAddDialog
 from desktop.widgets.device_card import DeviceCard
+from desktop.widgets.edit_dialog import EditAccountDialog
 from desktop.widgets.reset_dialog import ResetConfirmDialog
 from version import APP_TITLE, APP_VERSION_TAG
 
@@ -43,9 +45,8 @@ class MainWindow(QMainWindow):
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_snapshot)
         self._refresh_timer.start(1000)
-        # 启动即读设备 + 回填配置(但 ApplicationRunState = STOPPED, 不自动运行)
+        # 启动即读设备(ApplicationRunState = STOPPED, 不自动运行)
         self._refresh_snapshot()
-        self._restore_chat_config()
 
     # ── 布局 ──
 
@@ -72,28 +73,12 @@ class MainWindow(QMainWindow):
         root.addLayout(title_row)
 
         # ── 账号来源 ──
-        source_box = QGroupBox("账号来源")
-        source_layout = QGridLayout(source_box)
-        source_layout.addWidget(QLabel("来源:"), 0, 0)
-        self.source_combo = QComboBox()
-        for key, label in CHAT_SOURCES:
-            self.source_combo.addItem(label, key)
-        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
-        source_layout.addWidget(self.source_combo, 0, 1)
-        self.chat_label = QLabel("QQ群/聊天框名称:")
-        source_layout.addWidget(self.chat_label, 0, 2)
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText(
-            "请输入接收账号的QQ群聊或聊天框名称")
-        self.chat_input.setMinimumWidth(280)
-        source_layout.addWidget(self.chat_input, 0, 3)
-        self.confirm_btn = QPushButton("确认并运行")
-        self.confirm_btn.setStyleSheet(
-            "background: #1565c0; color: white; padding: 6px 22px; "
-            "border-radius: 4px; font-weight: bold;")
-        self.confirm_btn.clicked.connect(self._on_confirm_run)
-        source_layout.addWidget(self.confirm_btn, 0, 4)
-        root.addWidget(source_box)
+        # v1.2.0: QQ群/聊天框取号已移除(第 1 节)。账号由各设备卡片上的
+        # 人工账号队列输入, 见 DeviceCard 加号行/批量添加。
+        root.addWidget(QLabel(
+            "账号由每台设备的「人工账号队列」输入 — 在下方设备卡片中添加账号密码, "
+            "账号仅绑定该手机(第 3 节)。"))
+
 
         # ── 系统状态行(设备数拆三个指标: 检测到 / READY / 运行中) ──
         status_row = QHBoxLayout()
@@ -101,10 +86,9 @@ class MainWindow(QMainWindow):
         self.detected_label = QLabel("检测到设备: 0")
         self.ready_label = QLabel("READY设备: 0")
         self.running_workers_label = QLabel("运行中Worker: 0")
-        self.source_state_label = QLabel("账号来源: —")
         self.status_font = "color: #424242;"
         for lb in (self.adb_label, self.detected_label, self.ready_label,
-                   self.running_workers_label, self.source_state_label):
+                   self.running_workers_label):
             lb.setStyleSheet(self.status_font)
             status_row.addWidget(lb)
         status_row.addStretch(1)
@@ -127,7 +111,7 @@ class MainWindow(QMainWindow):
         # ── 运行控制 ──
         ctrl_box = QGroupBox("运行控制")
         ctrl_layout = QGridLayout(ctrl_box)
-        self.start_btn = QPushButton("开始运行")
+        self.start_btn = QPushButton("开始全部")
         self.start_btn.clicked.connect(self._on_start)
         self.stop_all_btn = QPushButton("停止全部")
         self.stop_all_btn.setEnabled(False)
@@ -165,12 +149,13 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(self.reidentify_result, 3, 2)
         root.addWidget(ctrl_box)
 
-        # ── 运行统计 ──
+        # ── 运行统计(第 31 节: 设备/运行中/等待账号总数/当前执行/本次完成/失败) ──
         stats_box = QGroupBox("运行统计")
         stats_layout = QHBoxLayout(stats_box)
         self.stats_labels: dict[str, QLabel] = {}
-        for key, name in (("PENDING", "队列"), ("RUNNING", "运行中"),
-                          ("SUCCESS", "完成"), ("FAILED", "失败")):
+        for key, name in (("devices", "设备"), ("running", "运行中"),
+                          ("waiting", "等待账号"), ("active", "当前执行"),
+                          ("success", "本次完成"), ("failed", "失败")):
             lb = QLabel(f"{name}: 0")
             lb.setStyleSheet("font-weight: bold;")
             stats_layout.addWidget(lb)
@@ -220,6 +205,7 @@ class MainWindow(QMainWindow):
         self.bus.toast.connect(self._on_toast)
         self.bus.devices_changed.connect(self._on_devices_changed)
         self.bus.vpn_warning.connect(self._on_vpn_warning)
+        self.bus.queue_changed.connect(self._on_queue_changed)
 
     def _on_devices_changed(self, records: list):
         """DeviceMonitor 热插拔事件 → 立即刷新设备卡片与计数。"""
@@ -261,9 +247,10 @@ class MainWindow(QMainWindow):
         stopped = state in (ApplicationRunState.STOPPED,
                             ApplicationRunState.ERROR)
         stopping = state == ApplicationRunState.STOPPING
-        self.confirm_btn.setEnabled(stopped)
         self.start_btn.setEnabled(stopped)
         self.stop_all_btn.setEnabled(running and not stopping)
+        # 每张卡片的「开始」按钮跟随全局状态(第 25 节: 开始=启用消费)
+        self._refresh_snapshot()
 
     def _on_toast(self, level: str, message: str):
         if level == "error":
@@ -295,6 +282,8 @@ class MainWindow(QMainWindow):
         self._update_device_combo(snap["devices"])
 
     def _update_device_cards(self, devices: list):
+        system_running = self.controller.state in (
+            ApplicationRunState.RUNNING, ApplicationRunState.STARTING)
         seen = set()
         for i, dev in enumerate(devices):
             serial = dev["serial"]
@@ -305,9 +294,19 @@ class MainWindow(QMainWindow):
                 card.stop_requested.connect(self._on_stop_device)
                 card.reidentify_requested.connect(self._on_reidentify_device)
                 card.reset_requested.connect(self._on_reset_device)
+                card.start_requested.connect(self._on_start_device)
+                card.add_requested.connect(self._on_add_account)
+                card.batch_requested.connect(self._on_batch_add)
+                card.edit_requested.connect(self._on_edit_account)
+                card.delete_requested.connect(self._on_delete_account)
+                card.move_requested.connect(self._on_move_account)
+                card.to_front_requested.connect(self._on_to_front_account)
+                card.clear_requested.connect(self._on_clear_queue)
                 self._cards[serial] = card
-                self.devices_grid.addWidget(card, i // 3, i % 3)
-            card.update_snapshot(dev, i + 1)
+                self.devices_grid.addWidget(card, i, 0)   # 单列全宽卡片
+            dev["system_running"] = system_running
+            card.update_snapshot(dev, i + 1,
+                                 self.controller.queue_snapshot(serial))
         # 移除已拔掉的设备
         for serial in list(self._cards):
             if serial not in seen:
@@ -342,8 +341,6 @@ class MainWindow(QMainWindow):
             adb_ok = True
         self.adb_label.setText(f"ADB: {'正常' if adb_ok else '异常'}")
         self._paint_counts(snap.get("counts") or {})
-        self.source_state_label.setText(
-            f"账号来源: {'监听中' if snap['system']['running'] else '未运行'}")
 
     def _paint_counts(self, counts: dict):
         """三指标设备计数(检测到 / READY / 运行中Worker)。"""
@@ -353,9 +350,18 @@ class MainWindow(QMainWindow):
             f"运行中Worker: {counts.get('running', 0)}")
 
     def _update_stats(self, snap: dict):
-        stats = snap.get("accounts", {})
+        counts = snap.get("counts") or {}
+        qt = snap.get("queue_totals") or {}
+        values = {
+            "devices": len(snap.get("devices") or []),
+            "running": counts.get("running", 0),
+            "waiting": qt.get("waiting", 0),
+            "active": qt.get("running", 0),
+            "success": qt.get("success", 0),
+            "failed": qt.get("failed", 0),
+        }
         for key, lb in self.stats_labels.items():
-            lb.setText(f"{lb.text().split(':')[0]}: {stats.get(key, 0)}")
+            lb.setText(f"{lb.text().split(':')[0]}: {values.get(key, 0)}")
         overall = snap.get("throughput", {}).get("overall") or {}
         if overall:
             self.perf_label.setText(
@@ -375,39 +381,160 @@ class MainWindow(QMainWindow):
                 self.device_combo.setCurrentIndex(idx)
         self.device_combo.blockSignals(False)
 
-    # ── 配置回填 ──
+    # ── 账号队列操作(第 5-47 节) ──
 
-    def _restore_chat_config(self):
-        source, name = self.controller.chat_config()
-        idx = self.source_combo.findData(source)
-        if idx >= 0:
-            self.source_combo.setCurrentIndex(idx)
-        self.chat_input.setText(name)
+    def _on_queue_changed(self, serial: str):
+        """队列变化事件 → 立即刷新(第 58 节: 事件驱动, 不轮询)。"""
+        self._refresh_snapshot()
 
-    def _on_source_changed(self):
-        source = self.source_combo.currentData()
-        if source == "qq_ui":
-            self.chat_label.setText("QQ群/聊天框名称:")
-            self.chat_input.setPlaceholderText(
-                "请输入接收账号的QQ群聊或聊天框名称")
-        else:
-            self.chat_label.setText("账号文件:")
-            self.chat_input.setPlaceholderText(
-                "请输入账号文件完整路径(.xlsx/.csv)")
+    def _on_add_account(self, serial, username, password, to_front):
+        if not username:
+            QMessageBox.warning(self, "提示", "账号不能为空")
+            return
+        if not password:
+            QMessageBox.warning(self, "提示", "密码不能为空")
+            return
+        dup = self.controller.check_duplicate(serial, username)
+        if dup.get("same_device"):
+            # 同设备重复(第 36 节): 默认 不添加
+            box = QMessageBox(self)
+            box.setWindowTitle("账号重复")
+            box.setText(f"账号 {username} 已在此设备队列中, 是否仍然添加?")
+            add_btn = box.addButton("仍然添加", QMessageBox.AcceptRole)
+            no_btn = box.addButton("不添加", QMessageBox.RejectRole)
+            box.setDefaultButton(no_btn)
+            box.exec()
+            if box.clickedButton() is not add_btn:
+                return
+        if dup.get("other_device"):
+            # 跨设备已分配(第 37 节): 默认 取消
+            other = self._device_display_name(dup["other_device"])
+            box = QMessageBox(self)
+            box.setWindowTitle("跨设备提示")
+            box.setText(f"该账号当前已经分配给: {other}, "
+                        "是否仍然继续添加?")
+            add_btn = box.addButton("仍然添加", QMessageBox.AcceptRole)
+            cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+            box.setDefaultButton(cancel_btn)
+            box.exec()
+            if box.clickedButton() is not add_btn:
+                return
+        result = self.controller.add_account(
+            serial, username, password, to_front)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法添加",
+                                result.get("error", "未知错误"))
+            return
+        card = self._cards.get(serial)
+        if card is not None:
+            card.clear_add_inputs()
+
+    def _device_display_name(self, serial: str) -> str:
+        card = self._cards.get(serial)
+        if card is not None:
+            return f"设备{card.index:02d} {card.model.text()}"
+        return f"设备 {serial}"
+
+    def _on_batch_add(self, serial: str):
+        dlg = BatchAddDialog(self.controller, serial, self)
+        dlg.exec()
+
+    def _find_task(self, serial: str, task_id: int) -> dict | None:
+        snap = self.controller.queue_snapshot(serial)
+        for t in snap.get("tasks") or []:
+            if t["id"] == task_id:
+                return t
+        return None
+
+    def _on_edit_account(self, serial: str, task_id: int):
+        task = self._find_task(serial, task_id)
+        if task is None:
+            return
+        if task["status"] != "WAITING":
+            QMessageBox.warning(self, "无法编辑",
+                                "仅「等待」状态的账号可以编辑(第 35 节)")
+            return
+        dlg = EditAccountDialog(task["username"], self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        username, password = dlg.values()
+        result = self.controller.update_account(
+            serial, task_id, username, password)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法保存",
+                                result.get("error", "未知错误"))
+
+    def _on_delete_account(self, serial: str, task_id: int):
+        task = self._find_task(serial, task_id)
+        if task is None:
+            return
+        if task["status"] not in ("WAITING", "RETRY"):
+            QMessageBox.warning(self, "无法删除",
+                                "仅「等待/待重试」的账号可删除(第 32 节)")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("删除账号")
+        box.setText(f"确定删除账号 {task['username']} 吗?\n"
+                    "(仅「等待/待重试」的账号可删除)")
+        del_btn = box.addButton("删除", QMessageBox.AcceptRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        if box.clickedButton() is not del_btn:
+            return
+        result = self.controller.remove_account(serial, task_id)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法删除",
+                                result.get("error", "未知错误"))
+
+    def _on_move_account(self, serial: str, task_id: int, direction: str):
+        task = self._find_task(serial, task_id)
+        if task is not None and task["status"] not in ("WAITING", "RETRY"):
+            QMessageBox.warning(self, "无法移动",
+                                "仅「等待/待重试」的账号可移动")
+            return
+        result = self.controller.move_account(serial, task_id, direction)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法移动",
+                                result.get("error", "未知错误"))
+
+    def _on_to_front_account(self, serial: str, task_id: int):
+        task = self._find_task(serial, task_id)
+        if task is not None and task["status"] not in ("WAITING", "RETRY"):
+            QMessageBox.warning(self, "无法插到队首",
+                                "仅「等待/待重试」的账号可插到队首")
+            return
+        result = self.controller.move_to_front(serial, task_id)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法插到队首",
+                                result.get("error", "未知错误"))
+
+    def _on_clear_queue(self, serial: str):
+        qs = self.controller.queue_snapshot(serial)
+        n = qs.get("waiting", 0) + qs.get("retry", 0)
+        box = QMessageBox(self)
+        box.setWindowTitle("清空待执行")
+        box.setText(f"确定清空该设备的 {n} 个待执行账号吗?\n"
+                    "(当前执行中的账号与「已中断」账号保留)")
+        clear_btn = box.addButton("清空", QMessageBox.AcceptRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        if box.clickedButton() is not clear_btn:
+            return
+        result = self.controller.clear_waiting(serial)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法清空",
+                                result.get("error", "未知错误"))
+
+    def _on_start_device(self, serial: str):
+        """单设备「开始」(第 25 节: 开始=启用消费)。"""
+        result = self.controller.start_device(serial)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法开始",
+                                result.get("error", "未知错误"))
 
     # ── 按钮 ──
-
-    def _on_confirm_run(self):
-        if not self._vpn_preflight_guard():
-            return
-        source = self.source_combo.currentData()
-        name = self.chat_input.text()
-        result = self.controller.confirm_and_run(source, name)
-        if not result.get("ok"):
-            QMessageBox.warning(self, "无法启动", result.get("error", "未知错误"))
-        else:
-            self.log_view.appendPlainText(
-                f"[{time.strftime('%H:%M:%S')}] 正在启动生产运行...")
 
     def _on_start(self):
         if not self._vpn_preflight_guard():
@@ -576,6 +703,21 @@ class MainWindow(QMainWindow):
     # ── 关闭 ──
 
     def closeEvent(self, event):
+        # 待执行账号确认(第 28/29 节): 关闭清空内存队列, 已完成记录保留
+        pending = self.controller.pending_total()
+        if pending > 0:
+            box = QMessageBox(self)
+            box.setWindowTitle("确定关闭程序吗?")
+            box.setText(
+                f"当前还有 {pending} 个待执行账号, 关闭后将清空本次队列。\n\n"
+                "已完成的账号记录、历史日志和错误记录不会删除。")
+            close_btn = box.addButton("确定关闭", QMessageBox.AcceptRole)
+            cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+            box.setDefaultButton(cancel_btn)
+            box.exec()
+            if box.clickedButton() is not close_btn:
+                event.ignore()
+                return
         if self.controller.state in (ApplicationRunState.RUNNING,
                                      ApplicationRunState.STARTING,
                                      ApplicationRunState.STOPPING):

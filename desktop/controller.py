@@ -22,6 +22,8 @@ from typing import Optional
 
 import yaml
 
+from core.account_queues import ManualDeviceQueueManager
+from core.bulk_parser import parse_account_lines
 from core.config import ControlConfig
 from core.logger import setup_logging
 from desktop.app_paths import AppPaths, resource_root
@@ -37,13 +39,6 @@ from storage.repositories import AccountRepository, TaskResultRepository
 from version import APP_NAME, APP_VERSION
 
 logger = logging.getLogger(__name__)
-
-# 账号来源选项(GUI 下拉框动态读取)
-CHAT_SOURCES = [
-    ("qq_ui", "QQ群聊"),
-    ("excel", "Excel 文件"),
-    ("csv", "CSV 文件"),
-]
 
 
 class DesktopAppController:
@@ -89,6 +84,12 @@ class DesktopAppController:
         # 设备环境重置(人工触发): 进行中的 serial 集合, 防重复触发
         self._resetting: set[str] = set()
 
+        # 人工账号队列(v1.2.0 生产取号模型, 第 2-4 节): 以 ADB Serial
+        # 为 Key 的每设备独立 FIFO 队列 + 全局账号执行锁。只在内存 —
+        # 关闭程序即清空(第 28 节), 历史记录由 SQLite 永久保留。
+        self.queue_manager = ManualDeviceQueueManager(
+            on_change=self._on_queue_change)
+
         # ── 设备单一状态源 + 热插拔监控(0 设备 BUG 整改) ──
         # ADB 定位统一入口: 捆绑 platform-tools 优先, 注入
         # ADBUTILS_ADB_PATH 让 u2/adbutils 内部共用同一份 adb,
@@ -97,9 +98,18 @@ class DesktopAppController:
         self.registry = DeviceRegistry()
         self._dm = None                # DeviceManager 懒建(共享单例)
         self._monitor: Optional[DeviceMonitor] = None
-        if bus is not None:
+        if self.bus is not None:
             # GUI 模式: 启动热插拔监控(测试/无 GUI 不启动, 避免噪音)
             self.start_monitor()
+
+    def _on_queue_change(self, serial: str):
+        """队列变化 → GUI 事件(第 58 节: 事件驱动刷新, 非纯轮询)。"""
+        if self.bus is not None:
+            try:
+                self.bus.queue_changed.emit(serial)
+            except Exception:
+                logger.debug("[队列] queue_changed 事件发送失败",
+                             exc_info=True)
 
     # ── 应用运行状态 ──
 
@@ -227,6 +237,115 @@ class DesktopAppController:
         added = self.accounts.add_batch(items)
         return added, ""
 
+    # ── 人工账号队列(v1.2.0 生产取号, 第 5-47 节) ──
+
+    def queue_for(self, serial: str):
+        """取(或建)该设备的队列 — GUI 直接读时使用。"""
+        return self.queue_manager.queue_for(serial)
+
+    def add_account(self, serial: str, username: str, password: str,
+                    to_front: bool = False) -> dict:
+        """单账号加入设备队列(第 5 节)。同设备重复 → 拒绝(第 36 节)。"""
+        username = (username or "").strip()
+        if not username:
+            return {"ok": False, "error": "账号不能为空"}
+        if not password:
+            return {"ok": False, "error": "密码不能为空"}
+        q = self.queue_manager.queue_for(serial)
+        dup, added = q.add_task(username, password, to_front=to_front)
+        if not added:
+            return {"ok": False,
+                    "error": f"账号 {dup.masked()} 已在该设备队列中"}
+        return {"ok": True, "added": 1}
+
+    def add_accounts_batch(self, serial: str, text: str,
+                           to_front: bool = False) -> dict:
+        """批量加入(第 9-13 节): 实时解析 + 逐行错误 + 预览后添加。"""
+        parsed = parse_account_lines(text or "")
+        q = self.queue_manager.queue_for(serial)
+        pairs = []
+        skipped = 0
+        for line in parsed.ok_lines:
+            if q.find_by_username(line.username) is None:
+                pairs.append((line.username, line.password))
+            else:
+                skipped += 1      # 已在此设备队列中(不再提示)
+        added, _ = q.add_batch(pairs, to_front=to_front)
+        errors = [{"line_no": e.line_no, "raw": e.raw, "error": e.error}
+                  for e in parsed.error_lines]
+        return {"ok": True, "added": added, "skipped": skipped,
+                "errors": errors, "error_count": len(errors) + skipped}
+
+    def check_duplicate(self, serial: str, username: str) -> dict:
+        """加号前重复检测(第 36/37 节):
+        same_device → 同设备重复; other_device → 跨设备已分配(serial)。"""
+        username = (username or "").strip()
+        q = self.queue_manager.get(serial)
+        same_device = (q is not None
+                       and q.find_by_username(username) is not None)
+        other_device = None
+        if not same_device:
+            other_device = \
+                self.queue_manager.find_device_of_username(username)
+            if other_device == serial:
+                other_device = None
+        return {"ok": True, "same_device": same_device,
+                "other_device": other_device}
+
+    def remove_account(self, serial: str, task_id: int) -> dict:
+        """删除待执行账号 — 仅 等待/待重试(第 32 节)。"""
+        q = self.queue_manager.get(serial)
+        if q is None or not q.remove_task(task_id):
+            return {"ok": False, "error": "仅「等待/待重试」的账号可删除"}
+        return {"ok": True}
+
+    def clear_waiting(self, serial: str) -> dict:
+        """清空待执行(第 33 节): 保留当前账号与已中断账号。"""
+        q = self.queue_manager.get(serial)
+        if q is None:
+            return {"ok": True, "cleared": 0}
+        return {"ok": True, "cleared": q.clear_waiting()}
+
+    def update_account(self, serial: str, task_id: int, username: str,
+                       password: str) -> dict:
+        """编辑账号 — 仅 等待(第 35 节)。"""
+        q = self.queue_manager.get(serial)
+        if q is None:
+            return {"ok": False, "error": "队列不存在"}
+        ok, err = q.update_task(task_id, username, password)
+        return {"ok": ok, "error": err}
+
+    def move_account(self, serial: str, task_id: int, direction: str) -> dict:
+        q = self.queue_manager.get(serial)
+        if q is None or not q.move_task(task_id, direction):
+            return {"ok": False,
+                    "error": "无法移动(仅待执行账号, 且已是首/末位)"}
+        return {"ok": True}
+
+    def move_to_front(self, serial: str, task_id: int) -> dict:
+        """插到队首(第 47 节): 不打断当前 RUNNING 账号。"""
+        q = self.queue_manager.get(serial)
+        if q is None or not q.move_to_front(task_id):
+            return {"ok": False, "error": "无法插到队首(仅待执行账号)"}
+        return {"ok": True}
+
+    def queue_snapshot(self, serial: str) -> dict:
+        """GUI 队列表格数据(第 14 节: 快照绝不包含密码)。"""
+        q = self.queue_manager.get(serial)
+        if q is None:
+            return {"tasks": [], "current": None, "pending_total": 0,
+                    "waiting": 0, "retry": 0, "interrupted": 0,
+                    "running": 0, "success": 0, "failed": 0}
+        return q.snapshot()
+
+    def queue_totals(self) -> dict:
+        """全局队列统计(第 31 节)。"""
+        return self.queue_manager.totals()
+
+    def pending_total(self) -> int:
+        """全部设备待执行账号数(关闭确认提示, 第 29 节)。"""
+        return self.queue_manager.pending_total()
+
     # ── 环境检查 ──
 
     def check_environment(self) -> dict:
@@ -348,7 +467,10 @@ class DesktopAppController:
         try:
             if self.scheduler is None:
                 from core.task_scheduler import TaskScheduler
-                self.scheduler = TaskScheduler(self.cfg)
+                # 队列模式: Worker 从本设备人工队列取号(账号不落
+                # SQLite accounts 表, 历史仍写 task_results)
+                self.scheduler = TaskScheduler(self.cfg,
+                                              queue_manager=self.queue_manager)
             # 文件来源先导入账号
             if self.cfg.account_provider in ("excel", "csv"):
                 added, err = self._import_file_accounts()
@@ -420,11 +542,28 @@ class DesktopAppController:
 
     # ── 恢复/继续 ──
 
-    def start_device(self, serial: str) -> dict:
+    def start_device(self, serial: str, trust_residual: bool = True) -> dict:
         """启动/恢复单台设备。有 Checkpoint 时注入「停止后继续」配置:
-        真实页面检测优先于 Checkpoint(worker DETECT_PAGE 会先识别页面)。"""
+        真实页面检测优先于 Checkpoint(worker DETECT_PAGE 会先识别页面)。
+
+        队列模式: 停止时在途账号已 INTERRUPTED 插回队首 → Worker
+        启动后自然优先恢复(第 27/56 节), 并注入残留会话信任(桌面版
+        「停止后继续」语义)。trust_residual=False 用于设备环境重置后
+        (pm clear 已清游戏会话, 残留会话不可信)。
+        """
         if self.scheduler is None:
             return {"ok": False, "error": "调度器未启动"}
+        if self.queue_manager is not None:
+            q = self.queue_manager.get(serial)
+            front = q.front_interrupted() if q is not None else None
+            if front is not None and trust_residual:
+                resume = dict(self.cfg.get("resume") or {})
+                resume[serial] = {"account": front.username,
+                                  "trust_residual_session": True}
+                self.cfg.system["resume"] = resume
+                logger.info(f"[桌面] 注入恢复配置: {serial} → "
+                            f"账号 {front.masked()}")
+            return self.scheduler.start_device(serial)
         cp = self._checkpoints.load(serial)
         account_id = cp.account_id if cp else None
         if account_id is not None:
@@ -496,21 +635,39 @@ class DesktopAppController:
         return {"ok": True}
 
     def _reset_device_worker(self, serial: str, include_browser: bool):
+        # 重置前记录该设备 Worker 是否在运行(第 56 节: 重置成功后
+        # 自动恢复消耗队列, 不要求人工再点开始)
+        was_running = (self.scheduler is not None
+                       and serial in self.scheduler._workers)
         try:
             from desktop.device_reset import DeviceResetService
-            DeviceResetService(self).reset(serial, include_browser)
+            outcome = DeviceResetService(self).reset(serial, include_browser)
         finally:
             with self._lock:
                 self._resetting.discard(serial)
-            if self.bus is not None:
-                rec = self.registry.get(serial)
-                ok = (rec is not None and rec.reset_state
-                      not in ("RESETTING", "RESET_FAILED"))
-                if ok and rec is not None:
-                    self.bus.toast.emit(
-                        "info", f"设备 {rec.model or serial[:12]} 环境重置完成")
-                    # 刷新设备列表(重置后重新初始化, 状态变化立即可见)
-                    self.rescan_now()
+        if outcome.ok and was_running and self.scheduler is not None:
+            # 队列模式: 当前账号已 INTERRUPTED 回队首, Worker 重启后
+            # 自动优先恢复; pm clear 已清会话 → 不注入残留会话信任
+            try:
+                result = self.scheduler.start_device(serial)
+                if not result.get("ok"):
+                    logger.warning("[重置] %s 自动恢复 Worker 失败: %s",
+                                   serial, result)
+                else:
+                    logger.info("[重置] %s Worker 已自动恢复(继续队列)",
+                                serial)
+            except Exception as e:
+                logger.warning("[重置] %s 自动恢复 Worker 异常: %s",
+                               serial, e)
+        if self.bus is not None:
+            rec = self.registry.get(serial)
+            ok = (rec is not None and rec.reset_state
+                  not in ("RESETTING", "RESET_FAILED"))
+            if ok and rec is not None:
+                self.bus.toast.emit(
+                    "info", f"设备 {rec.model or serial[:12]} 环境重置完成")
+                # 刷新设备列表(重置后重新初始化, 状态变化立即可见)
+                self.rescan_now()
 
     # ── Checkpoint ──
 
@@ -607,14 +764,14 @@ class DesktopAppController:
     def _finish_run(self, stop_reason: str):
         if self.run_id is None:
             return
-        stats = self.accounts.stats()
+        # 队列模式: 完成/失败取自队列会话计数(SQLite accounts 表无记录)
+        totals = self.queue_manager.totals()
+        completed, failed = totals["success"], totals["failed"]
         try:
             self.db.execute(
                 "UPDATE runs SET ended_at=?, stop_reason=?, completed=?, "
                 "failed=? WHERE id=?",
-                (time.time(), stop_reason,
-                 stats.get("SUCCESS", 0), stats.get("FAILED", 0),
-                 self.run_id))
+                (time.time(), stop_reason, completed, failed, self.run_id))
         except Exception as e:
             logger.warning(f"[桌面] run 结束记录失败: {e}")
         self.run_id = None
@@ -636,8 +793,10 @@ class DesktopAppController:
                                "workers": 0},
                     "devices": devices, "counts": counts,
                     "accounts": self.accounts.stats(),
+                    "queue_totals": self.queue_totals(),
                     "throughput": {}}
         snap = self.scheduler.snapshot()
+        paused = snap["system"].get("paused", False)
         # worker 状态同步回注册表(单一状态源)
         for dev in snap["devices"]:
             state = dev.get("worker_state", "-")
@@ -656,14 +815,52 @@ class DesktopAppController:
                 dev["model"] = rec.model or dev.get("model", "-")
                 dev["reset_state"] = rec.reset_state
                 dev["reset_detail"] = rec.reset_detail
+            # 设备运行模式(第 57 节)
+            alive = dev.get("worker_state", "-") not in ("-", "STOPPED")
+            dev["run_mode"] = self._compute_run_mode(dev, alive, paused)
+        snap["queue_totals"] = self.queue_totals()
         snap["counts"] = self.registry.counts()
         return snap
 
+    def _compute_run_mode(self, dev: dict, alive: bool, paused: bool) -> str:
+        """设备运行模式(第 57 节):
+        DISABLED / WAITING_FOR_ACCOUNT / RUNNING_ACCOUNT / PAUSED /
+        RESETTING / ERROR。"""
+        if dev.get("reset_state") == "RESETTING":
+            return "RESETTING"
+        if dev.get("reset_state") == "RESET_FAILED":
+            return "ERROR"
+        if dev.get("status") == "DEVICE_ERROR":
+            return "ERROR"
+        if alive:
+            if paused:
+                return "PAUSED"
+            if dev.get("account"):
+                return "RUNNING_ACCOUNT"
+            return "WAITING_FOR_ACCOUNT"
+        return "DISABLED"
+
     def _registry_devices(self) -> list[dict]:
-        """registry → GUI 设备卡片数据结构(不触发扫描)。"""
+        """registry → GUI 设备卡片数据结构(不触发扫描)。
+
+        调度器未启动时队列照常工作(人工输号先于「开始全部」) —
+        队列块/运行模式同样下发, GUI 队列表格在停止状态即可编辑。
+        """
         devices = []
         for r in self.registry.records():
-            devices.append({
+            queue_block = None
+            q = self.queue_manager.get(r.serial)
+            if q is not None:
+                qs = q.snapshot()
+                queue_block = {
+                    "pending_total": qs["pending_total"],
+                    "waiting": qs["waiting"],
+                    "retry": qs["retry"],
+                    "interrupted": qs["interrupted"],
+                    "success": qs["success"],
+                    "failed": qs["failed"],
+                }
+            dev = {
                 "serial": r.serial,
                 "model": r.model or "-",
                 "brand": r.brand or "-",
@@ -678,13 +875,18 @@ class DesktopAppController:
                 "worker_state": r.worker_state,
                 "page": "-",
                 "account": "",
+                "account_elapsed": 0,
                 "error": r.ready_detail if not r.ready else "",
                 "reset_state": r.reset_state,
                 "reset_detail": r.reset_detail,
                 "success_count": 0,
                 "fail_count": 0,
                 "last_duration": 0,
-            })
+                "queue": queue_block,
+            }
+            dev["run_mode"] = self._compute_run_mode(
+                dev, alive=False, paused=False)
+            devices.append(dev)
         return devices
 
     def get_history(self, scope: str = "today", limit: int = 500) -> list:
@@ -722,4 +924,6 @@ class DesktopAppController:
         except Exception:
             pass
         self.paths.clean_runtime()  # 仅清理临时 checkpoint/session
+        # 第 28 节: 关闭程序清空内存队列(历史记录由 SQLite 永久保留)
+        self.queue_manager.clear_all()
         logger.info(f"[桌面] 已关闭({APP_NAME} {APP_VERSION})")

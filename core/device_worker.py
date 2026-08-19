@@ -28,6 +28,11 @@ from models.page_state import PageState
 from models.task import TaskResult, TaskRunState
 from storage.repositories import AccountRepository, TaskResultRepository
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:  # 仅类型标注(队列模式 v1.2.0)
+    from core.account_queues import (DeviceAccountQueue,
+                                     GlobalAccountExecutionRegistry)
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,12 +75,20 @@ class DeviceWorker(threading.Thread):
                  stop_event: threading.Event,
                  pause_event: threading.Event,
                  runtime: Optional[WorkerRuntime] = None,
-                 prefetched_account: Optional[Account] = None):
+                 prefetched_account: Optional[Account] = None,
+                 queue: Optional["DeviceAccountQueue"] = None,
+                 execution_registry:
+                 Optional["GlobalAccountExecutionRegistry"] = None):
         super().__init__(name=f"worker-{serial}", daemon=True)
         self.serial = serial
         self.cfg = cfg
         self.devices = device_manager
-        self.accounts = account_repo
+        # 队列模式(v1.2.0 人工账号队列): self.accounts 直接指向本设备队列,
+        # 方法签名与 AccountRepository 对齐(mark_running/mark_success/
+        # mark_retry/mark_failed/release) — 状态机代码零改动复用。
+        self._queue_mode = queue is not None
+        self.accounts = queue if queue is not None else account_repo
+        self.execution_registry = execution_registry
         self.results = result_repo
         self.automation_factory = automation_factory
         self.stop_event = stop_event          # 全局停止
@@ -152,7 +165,13 @@ class DeviceWorker(threading.Thread):
             self._claim_next()
             if self.account is None:
                 self._set_state(WorkerState.IDLE)
-                time.sleep(float(self.cfg.get("poll_interval", 2)))
+                if self._queue_mode:
+                    # 队列模式: 空队列 → 等待账号(规格第 24 节)。
+                    # 条件变量等待 — 新账号加入毫秒级唤醒(规格第 61 节),
+                    # 不再轮询空转。5s 超时兜底重检。
+                    self.accounts.wait_for_task(5.0)
+                else:
+                    time.sleep(float(self.cfg.get("poll_interval", 2)))
                 return
 
         # 账号时间预算(生产吞吐量保护: 坏账号不拖死设备)
@@ -185,18 +204,21 @@ class DeviceWorker(threading.Thread):
     # ── 账号领取/释放 ──
 
     def _claim_next(self):
-        # 预取槽位优先(上一账号完成时已锁定, 零等待切换)
-        account = self._prefetched_account
-        self._prefetched_account = None
-        if account is None:
-            account = self.accounts.claim_next(self.serial)
-        if account is None and self.cfg.account_provider == "qq_ui":
-            # 队列为空 → 从本机 QQ 群取号(带冷却, 避免无新号时反复切 QQ)
-            now = time.time()
-            if now - self._last_qq_fetch_ts >= self._qq_fetch_cooldown:
-                self._last_qq_fetch_ts = now
-                self._fetch_accounts_from_qq()
+        if self._queue_mode:
+            account = self._claim_from_queue()
+        else:
+            # 预取槽位优先(上一账号完成时已锁定, 零等待切换)
+            account = self._prefetched_account
+            self._prefetched_account = None
+            if account is None:
                 account = self.accounts.claim_next(self.serial)
+            if account is None and self.cfg.account_provider == "qq_ui":
+                # 队列为空 → 从本机 QQ 群取号(带冷却, 避免无新号时反复切 QQ)
+                now = time.time()
+                if now - self._last_qq_fetch_ts >= self._qq_fetch_cooldown:
+                    self._last_qq_fetch_ts = now
+                    self._fetch_accounts_from_qq()
+                    account = self.accounts.claim_next(self.serial)
         if account is None:
             self.account = None
             return
@@ -226,6 +248,26 @@ class DeviceWorker(threading.Thread):
         self.fsm.force(WorkerState.CHECK_DEVICE)
         self.fsm.set_timeout(self.cfg.state_timeout("check_device"))
         self._set_state(WorkerState.CHECK_DEVICE)
+
+    def _claim_from_queue(self):
+        """队列模式取号: 本设备队列 FIFO 领取, 禁跨设备偷号(第 19 节)。
+
+        全局执行锁(第 38/39 节): 同 username 已在其他设备执行 →
+        本设备跳过该账号(退回队尾), 锁在账号完成/释放时归还。
+        """
+        task = self.accounts.pop_next()
+        if task is None:
+            return None
+        if self.execution_registry is not None and \
+                not self.execution_registry.try_acquire(task.username,
+                                                        self.serial,
+                                                        task.id):
+            holder = self.execution_registry.owner_of(task.username)
+            self.log.warning(f"[执行锁] {task.masked()} 正在设备 "
+                             f"{holder or '?'} 执行, 退回队尾等待")
+            self.accounts.defer_task(task.id)
+            return None
+        return task
 
     def _check_time_budget(self):
         """账号最大占用时间保护。
@@ -294,7 +336,7 @@ class DeviceWorker(threading.Thread):
         final = self.accounts.mark_retry(self.account.id, self.serial, error)
         self._finish_result(TaskRunState.FAILED,
                             self.fsm.state.value, error)
-        if final == AccountStatus.FAILED:
+        if final is not None and final.value == "FAILED":
             self.log.error(f"账号 {self.account.masked()} 超过最大重试，"
                            f"最终失败: {error}")
             self.runtime.fail_count += 1
@@ -303,6 +345,8 @@ class DeviceWorker(threading.Thread):
         self._next_account()
 
     def _next_account(self):
+        # 归还全局执行锁(账号已离开本 Worker — 队列模式才有)
+        self._release_execution_lock(self.account)
         self.account = None
         self._result = None
         self.runtime.account = ""
@@ -310,8 +354,9 @@ class DeviceWorker(threading.Thread):
         self.fsm.force(WorkerState.NEXT_ACCOUNT)
         self._set_state(WorkerState.NEXT_ACCOUNT)
         # 账号预取: 立即锁定下一账号, 消除切换空档
-        # (锁定时间短; worker 异常退出由 recover_stale 兜底释放)
-        if self._prefetched_account is None:
+        # (锁定时间短; worker 异常退出由 recover_stale 兜底释放)。
+        # 队列模式无预取(队列领取本身零等待, 且任务只在内存)。
+        if not self._queue_mode and self._prefetched_account is None:
             self._prefetched_account = self.accounts.claim_next(self.serial)
 
     # ── 状态机 ──
@@ -509,7 +554,9 @@ class DeviceWorker(threading.Thread):
                 self._perf_stats.add(report)
                 self._tracer = None
             # 测试循环: 成功次数未达 test_cycles → 重置 PENDING 再跑
-            cycles = int(self.cfg.get("test_cycles", 0) or 0)
+            # (队列模式不适用: 人工队列按输入顺序一次一账号, 第 18 节)
+            cycles = 0 if self._queue_mode else \
+                int(self.cfg.get("test_cycles", 0) or 0)
             if cycles > 0:
                 done = self.results.count_success(
                     self.account.id, since=self._cycle_started_at)
@@ -712,10 +759,19 @@ class DeviceWorker(threading.Thread):
     def _shutdown(self):
         self.log.info("Worker 退出")
         if self.account is not None:
-            # 运行中被打断 → 归还队列（避免账号卡死在 RUNNING）。
-            # 设备环境重置等场景由 request_stop(reason) 传入专属原因。
-            self.accounts.mark_retry(self.account.id, self.serial,
-                                     self._stop_reason or "worker interrupted")
+            if self._queue_mode:
+                # 队列模式: 在途账号 → INTERRUPTED 插回队首(下次启动
+                # 优先恢复当前账号, 规格第 27/56 节), 不烧重试。
+                self.accounts.mark_interrupted(
+                    self.account.id,
+                    self._stop_reason or "worker interrupted")
+            else:
+                # 运行中被打断 → 归还队列（避免账号卡死在 RUNNING）。
+                # 设备环境重置等场景由 request_stop(reason) 传入专属原因。
+                self.accounts.mark_retry(
+                    self.account.id, self.serial,
+                    self._stop_reason or "worker interrupted")
+            self._release_execution_lock(self.account)
         if self._prefetched_account is not None:
             # 预取账号已 LOCKED 但从未开始执行 → 释放回 PENDING(不烧
             # 重试次数), 否则停止/重置后该账号被占满 stale 清扫周期
@@ -723,5 +779,14 @@ class DeviceWorker(threading.Thread):
                 self._prefetched_account.id,
                 self._stop_reason or "worker stopped before start")
             self._prefetched_account = None
+        if self._queue_mode and self.execution_registry is not None:
+            # 兜底: 清掉本设备残留的全部执行锁(防泄漏)
+            self.execution_registry.release_all_for(self.serial)
         if self.controller is not None:
             self.controller.disconnect()
+
+    def _release_execution_lock(self, account):
+        """归还某账号的全局执行锁(队列模式)。"""
+        if (self._queue_mode and self.execution_registry is not None
+                and account is not None):
+            self.execution_registry.release(account.account, self.serial)

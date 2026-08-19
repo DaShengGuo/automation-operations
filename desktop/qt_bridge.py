@@ -22,6 +22,7 @@ class QtEventBus(QObject):
     toast = Signal(str, str)              # (级别, 消息) — 弹窗/状态栏提示
     devices_changed = Signal(list)        # 设备注册表热插拔变化(record dict 列表)
     vpn_warning = Signal(str, str)        # (serial, detail) — 设备 VPN 未检测到
+    queue_changed = Signal(str)           # (serial) — 账号队列变化(第 58 节: 事件驱动刷新)
 
 
 class QtLogHandler(logging.Handler):

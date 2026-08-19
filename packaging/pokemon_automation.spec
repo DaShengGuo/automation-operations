@@ -73,10 +73,16 @@ hiddenimports = [
     "core.task_scheduler",
     "core.qq_provider",
     "core.watchdog",
+    # v1.2.0 人工按设备账号队列
+    "core.account_queues",
+    "core.bulk_parser",
     "desktop.app",
+    "desktop.controller",
     "desktop.main_window",
     "desktop.history_dialog",
     "desktop.widgets.device_card",
+    "desktop.widgets.batch_dialog",
+    "desktop.widgets.edit_dialog",
     # 设备整改模块(动态导入/依赖链, 显式声明防漏)
     "desktop.process_runner",
     "desktop.adb_locator",

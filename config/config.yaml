@@ -8,16 +8,16 @@ workers:
 # 账号领取轮询间隔(秒)
 poll_interval: 5
 
-# 账号来源:
-#   留空/不配置 = 手动导入(import-accounts 或 POST /api/accounts)
-#   "qq_ui"     = 队列为空时, 每台设备从自己手机上已登录的 QQ 群读取
-#                 (群聊上一条消息=账号, 下一条=密码; 已导入账号自动去重)
-account_provider: qq_ui
-account_provider_qq_group: 游戏自动化购买
+# 账号来源(v1.2.0):
+#   "manual_queue" = 人工按手机设备输入账号密码队列(桌面版默认, 唯一生产入口)
+#   留空/不配置   = 手动导入(import-accounts 或 POST /api/accounts)
+# QQ 群取号(qq_ui)已移除; 旧配置残留字段(如 account_provider_qq_group)
+# 会被忽略, 不会导致配置校验报错。
+account_provider: manual_queue
 
 # 测试循环: 每个账号执行成功后自动重置为 PENDING 再跑, 共 N 轮。
 # 0 = 关闭(生产必须为 0)。用于多账号来回循环测试。
-test_cycles: 3
+test_cycles: 0
 
 # ── 生产性能与恢复预算 ──────────────────────────────────────
 # 账号时间预算: 坏账号不拖死设备(吞吐量保护)
