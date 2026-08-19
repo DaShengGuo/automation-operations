@@ -5,6 +5,8 @@ desktop/widgets/device_card.py
 """
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout, QWidget)
@@ -19,6 +21,9 @@ STATUS_STYLES = {
     "offline": ("ADB离线", "#c62828", "#ffebee"),
     "unauthorized": ("未授权", "#c62828", "#ffebee"),
     "connecting": ("连接中", "#1565c0", "#e3f2fd"),
+    # 设备环境重置(人工触发) — 优先于其他状态显示
+    "resetting": ("正在重置环境...", "#e65100", "#fff3e0"),
+    "reset_failed": ("重置失败", "#c62828", "#ffebee"),
 }
 
 STATUS_BY_SNAPSHOT = {
@@ -35,11 +40,15 @@ class DeviceCard(QFrame):
     """单台设备的实时状态卡片。update_snapshot() 由主窗口定时调用。"""
 
     stop_requested = Signal(str)      # serial — 点击「停止」
+    reidentify_requested = Signal(str)  # serial — 点击「重新识别」
+    reset_requested = Signal(str)     # serial — 点击「重置设备环境」
 
     def __init__(self, serial: str, index: int, parent=None):
         super().__init__(parent)
         self.serial = serial
         self.index = index
+        self._notice = ""                  # show_notice 的临时提示
+        self._notice_until = 0.0           # 过期时间戳(秒)
         self.setObjectName("deviceCard")
         self.setStyleSheet(
             "QFrame#deviceCard { border: 1px solid #bdbdbd; "
@@ -81,18 +90,32 @@ class DeviceCard(QFrame):
         grid.addWidget(self.elapsed_label, 2, 0, 1, 2)
         layout.addLayout(grid)
 
-        # 卡死提示 + 停止按钮
+        # 卡死提示 + 停止/重新识别/重置按钮
         bottom = QHBoxLayout()
         self.stall_label = QLabel("")
         self.stall_label.setWordWrap(True)
         self.stall_label.setStyleSheet("color: #e65100; font-size: 12px;")
         self.stop_btn = QPushButton("停止")
-        self.stop_btn.setFixedWidth(64)
+        self.stop_btn.setFixedWidth(56)
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(
             lambda: self.stop_requested.emit(self.serial))
+        self.reidentify_btn = QPushButton("重新识别")
+        self.reidentify_btn.setFixedWidth(68)
+        self.reidentify_btn.setEnabled(False)
+        self.reidentify_btn.clicked.connect(
+            lambda: self.reidentify_requested.emit(self.serial))
+        self.reset_btn = QPushButton("重置设备环境")
+        self.reset_btn.setFixedWidth(96)
+        self.reset_btn.setEnabled(False)
+        self.reset_btn.setStyleSheet(
+            "color: #c62828; border: 1px solid #ef9a9a; border-radius: 3px;")
+        self.reset_btn.clicked.connect(
+            lambda: self.reset_requested.emit(self.serial))
         bottom.addWidget(self.stall_label, 1)
         bottom.addWidget(self.stop_btn)
+        bottom.addWidget(self.reidentify_btn)
+        bottom.addWidget(self.reset_btn)
         layout.addLayout(bottom)
 
     def update_snapshot(self, snap: dict, index: int):
@@ -105,20 +128,27 @@ class DeviceCard(QFrame):
 
         adb_state = snap.get("adb_state", "")
         status = snap.get("status", "")
-        key = STATUS_BY_SNAPSHOT.get(status, "offline")
-        # 有账号在跑 → 运行中优先
-        if snap.get("account") or snap.get("worker_running"):
-            key = "running"
-        elif adb_state == "device" and snap.get("ready"):
-            key = "idle"      # ADB 在线且初始化通过 → READY
-        elif adb_state == "device":
-            key = "online"    # ADB 在线(初始化未做/进行中)
-        elif adb_state == "unauthorized":
-            key = "unauthorized"
-        elif adb_state in ("offline", "no permissions"):
-            key = "offline"
-        elif adb_state == "missing":
-            key = "offline"
+        reset_state = snap.get("reset_state", "")
+        # 设备环境重置状态优先于一切(人工触发的维护动作)
+        if reset_state == "RESETTING":
+            key = "resetting"
+        elif reset_state == "RESET_FAILED":
+            key = "reset_failed"
+        else:
+            key = STATUS_BY_SNAPSHOT.get(status, "offline")
+            # 有账号在跑 → 运行中优先
+            if snap.get("account") or snap.get("worker_running"):
+                key = "running"
+            elif adb_state == "device" and snap.get("ready"):
+                key = "idle"      # ADB 在线且初始化通过 → READY
+            elif adb_state == "device":
+                key = "online"    # ADB 在线(初始化未做/进行中)
+            elif adb_state == "unauthorized":
+                key = "unauthorized"
+            elif adb_state in ("offline", "no permissions"):
+                key = "offline"
+            elif adb_state == "missing":
+                key = "offline"
         text, fg, bg = STATUS_STYLES[key]
         self.badge.setText(text)
         self.badge.setStyleSheet(
@@ -134,7 +164,15 @@ class DeviceCard(QFrame):
         # 非 device 状态显示具体原因/操作提示(unauthorized/offline 等)
         reject = snap.get("reject_reason") or ""
         error = snap.get("error") or ""
-        if reject:
+        if reset_state == "RESET_FAILED":
+            detail = snap.get("reset_detail") or ""
+            self.stall_label.setText(f"⚠ 重置失败: {detail}" if detail
+                                     else "⚠ 重置失败")
+        elif reset_state == "RESETTING":
+            self.stall_label.setText("正在重置设备环境, 请勿断开手机...")
+        elif self._notice and time.time() < self._notice_until:
+            self.stall_label.setText(self._notice)
+        elif reject:
             self.stall_label.setText(f"⚠ {reject}")
         elif error:
             self.stall_label.setText(f"⚠ {error}")
@@ -143,6 +181,16 @@ class DeviceCard(QFrame):
         # 停止按钮: 只有 worker 在跑才可点
         self.stop_btn.setEnabled(bool(snap.get("account"))
                                  or status == "RUNNING")
+        # 重新识别/重置按钮: 设备断开时禁用(重置进行中再禁重置)
+        online = adb_state != "missing"
+        self.reidentify_btn.setEnabled(online)
+        self.reset_btn.setEnabled(online and reset_state != "RESETTING")
+
+    def show_notice(self, text: str, seconds: float = 5.0):
+        """外部事件提示(重新识别结果等) — 显示数秒后随刷新恢复常态。"""
+        self._notice = text
+        self._notice_until = time.time() + seconds
+        self.stall_label.setText(text)
 
     @staticmethod
     def _fmt(sec: float) -> str:

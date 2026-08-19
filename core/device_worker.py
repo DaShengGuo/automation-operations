@@ -100,6 +100,7 @@ class DeviceWorker(threading.Thread):
         # 生产性能组件
         self._prefetched_account = prefetched_account  # 账号预取槽位
         # (不能叫 _next_account — 会遮蔽同名方法, 真机曾因此卡死循环)
+        self._stop_reason = ""                   # request_stop 的归还原因
         self._tracer = None                     # PerformanceTracer(懒创建)
         self._slow_logged = False               # SLOW_ACCOUNT 已提示
         self.last_action_ts = time.time()       # heartbeat
@@ -109,8 +110,13 @@ class DeviceWorker(threading.Thread):
 
     # ── 主循环 ──
 
-    def request_stop(self):
-        """请求本 Worker 退出（停止单台设备时使用）"""
+    def request_stop(self, reason: str = ""):
+        """请求本 Worker 退出（停止单台设备时使用）。
+
+        reason 记录在途账号的归还原因(如 "DEVICE_RESET"),
+        空则用默认 "worker interrupted"。
+        """
+        self._stop_reason = reason
         self._local_stop.set()
 
     def run(self):
@@ -706,8 +712,16 @@ class DeviceWorker(threading.Thread):
     def _shutdown(self):
         self.log.info("Worker 退出")
         if self.account is not None:
-            # 运行中被打断 → 归还队列（避免账号卡死在 RUNNING）
+            # 运行中被打断 → 归还队列（避免账号卡死在 RUNNING）。
+            # 设备环境重置等场景由 request_stop(reason) 传入专属原因。
             self.accounts.mark_retry(self.account.id, self.serial,
-                                     "worker interrupted")
+                                     self._stop_reason or "worker interrupted")
+        if self._prefetched_account is not None:
+            # 预取账号已 LOCKED 但从未开始执行 → 释放回 PENDING(不烧
+            # 重试次数), 否则停止/重置后该账号被占满 stale 清扫周期
+            self.accounts.release(
+                self._prefetched_account.id,
+                self._stop_reason or "worker stopped before start")
+            self._prefetched_account = None
         if self.controller is not None:
             self.controller.disconnect()

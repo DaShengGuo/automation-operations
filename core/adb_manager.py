@@ -107,6 +107,14 @@ class AdbManager:
                       timeout=timeout)
         return r.stdout.strip()
 
+    def shell_rc(self, serial: str, cmd: str, timeout: float = 15
+                 ) -> tuple[int, str]:
+        """shell 命令 + 返回码。pm clear 等命令部分 Android 版本
+        失败时退出码仍为 0, 调用方需结合 stdout 文本判定。"""
+        r = self._run([self.path, "-s", serial, "shell"] + cmd.split(),
+                      timeout=timeout)
+        return r.returncode, r.stdout.strip()
+
     def getprop(self, serial: str, prop: str) -> str:
         return self.shell(serial, f"getprop {prop}", timeout=10)
 

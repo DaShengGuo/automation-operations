@@ -86,6 +86,8 @@ class DesktopAppController:
         self._poll_stop = threading.Event()
         # 轮询持久化: 上次看到的设备账号(检测账号完成/状态变化)
         self._last_device_account: dict[str, str] = {}
+        # 设备环境重置(人工触发): 进行中的 serial 集合, 防重复触发
+        self._resetting: set[str] = set()
 
         # ── 设备单一状态源 + 热插拔监控(0 设备 BUG 整改) ──
         # ADB 定位统一入口: 捆绑 platform-tools 优先, 注入
@@ -472,6 +474,44 @@ class DesktopAppController:
         # 通过校验 → 从该状态继续
         return self.scheduler.resume_from_state(serial, step.worker_state)
 
+    # ── 设备环境重置(人工触发) ──
+
+    def reset_device_environment(self, serial: str,
+                                 include_browser: bool = False) -> dict:
+        """重置单台设备的自动化运行环境(后台线程, 不阻塞 GUI/他机)。
+
+        仅人工触发(设备卡片按钮)。默认只清游戏数据 + Runtime 状态,
+        不清理浏览器数据。只影响本设备: 其他设备 Worker 继续运行。
+        """
+        with self._lock:
+            if serial in self._resetting:
+                return {"ok": False, "error": "该设备正在重置中, 请稍候"}
+            rec = self.registry.get(serial)
+            if rec is None or rec.adb_state == "missing":
+                return {"ok": False, "error": "设备未连接, 无法重置"}
+            self._resetting.add(serial)
+        threading.Thread(target=self._reset_device_worker,
+                         args=(serial, include_browser), daemon=True,
+                         name=f"device-reset-{serial}").start()
+        return {"ok": True}
+
+    def _reset_device_worker(self, serial: str, include_browser: bool):
+        try:
+            from desktop.device_reset import DeviceResetService
+            DeviceResetService(self).reset(serial, include_browser)
+        finally:
+            with self._lock:
+                self._resetting.discard(serial)
+            if self.bus is not None:
+                rec = self.registry.get(serial)
+                ok = (rec is not None and rec.reset_state
+                      not in ("RESETTING", "RESET_FAILED"))
+                if ok and rec is not None:
+                    self.bus.toast.emit(
+                        "info", f"设备 {rec.model or serial[:12]} 环境重置完成")
+                    # 刷新设备列表(重置后重新初始化, 状态变化立即可见)
+                    self.rescan_now()
+
     # ── Checkpoint ──
 
     def _save_checkpoints(self):
@@ -614,6 +654,8 @@ class DesktopAppController:
                 dev["reject_reason"] = rec.reject_reason
                 dev["brand"] = rec.brand or dev.get("brand", "-")
                 dev["model"] = rec.model or dev.get("model", "-")
+                dev["reset_state"] = rec.reset_state
+                dev["reset_detail"] = rec.reset_detail
         snap["counts"] = self.registry.counts()
         return snap
 
@@ -637,6 +679,8 @@ class DesktopAppController:
                 "page": "-",
                 "account": "",
                 "error": r.ready_detail if not r.ready else "",
+                "reset_state": r.reset_state,
+                "reset_detail": r.reset_detail,
                 "success_count": 0,
                 "fail_count": 0,
                 "last_duration": 0,

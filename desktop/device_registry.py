@@ -46,6 +46,9 @@ class DeviceRecord:
     worker_running: bool = False
     worker_state: str = "-"
     reject_reason: str = ""           # 非 device 状态时的原因
+    # 设备环境重置(人工触发): "" / RESETTING / RESET_FAILED
+    reset_state: str = ""
+    reset_detail: str = ""            # 失败步骤/原因(GUI 显示)
     last_seen: float = field(default_factory=time.time)
     discovered_at: float = field(default_factory=time.time)
 
@@ -66,6 +69,8 @@ class DeviceRecord:
             "worker_running": self.worker_running,
             "worker_state": self.worker_state,
             "reject_reason": self.reject_reason,
+            "reset_state": self.reset_state,
+            "reset_detail": self.reset_detail,
             "last_seen": self.last_seen,
         }
 
@@ -195,6 +200,24 @@ class DeviceRegistry:
                             serial, "启动" if running else "停止", state)
             rec.worker_running = running
             rec.worker_state = state if running else "-"
+
+    def mark_resetting(self, serial: str, state: str, detail: str = ""
+                       ) -> None:
+        """设备环境重置状态(人工触发): "" / RESETTING / RESET_FAILED。
+
+        detail: RESET_FAILED 时的「步骤 — 原因」, GUI 卡片显示。
+        """
+        with self._lock:
+            rec = self._records.get(serial)
+            if rec is None:
+                rec = DeviceRecord(serial=serial)
+                self._records[serial] = rec
+            if (rec.reset_state, rec.reset_detail) != (state, detail):
+                logger.info("[RESET] 设备 %s 重置状态 %s%s",
+                            serial, state or "清除",
+                            f" — {detail}" if detail else "")
+            rec.reset_state = state
+            rec.reset_detail = detail
 
     def drop(self, serial: str) -> None:
         with self._lock:

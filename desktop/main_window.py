@@ -11,15 +11,17 @@ import os
 import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QComboBox, QFrame, QGridLayout, QGroupBox,
-                               QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-                               QMessageBox, QPlainTextEdit, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QGridLayout,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QMainWindow, QMessageBox, QPlainTextEdit,
+                               QPushButton, QScrollArea, QVBoxLayout,
+                               QWidget)
 
 from desktop.controller import CHAT_SOURCES, DesktopAppController
 from desktop.runtime_state import ApplicationRunState
 from desktop.state_registry import PokemonStateRegistry
 from desktop.widgets.device_card import DeviceCard
+from desktop.widgets.reset_dialog import ResetConfirmDialog
 from version import APP_TITLE, APP_VERSION_TAG
 
 GUI_MAX_LOG_LINES = 3000  # GUI 只保留最近行, 完整日志写文件
@@ -236,6 +238,8 @@ class MainWindow(QMainWindow):
                 "reject_reason": r["reject_reason"],
                 "worker_state": r["worker_state"],
                 "worker_running": r["worker_running"],
+                "reset_state": r["reset_state"],
+                "reset_detail": r["reset_detail"],
                 "page": "-", "account": "", "error": "",
                 "success_count": 0, "fail_count": 0, "last_duration": 0,
             })
@@ -299,6 +303,8 @@ class MainWindow(QMainWindow):
             if card is None:
                 card = DeviceCard(serial, i + 1)
                 card.stop_requested.connect(self._on_stop_device)
+                card.reidentify_requested.connect(self._on_reidentify_device)
+                card.reset_requested.connect(self._on_reset_device)
                 self._cards[serial] = card
                 self.devices_grid.addWidget(card, i // 3, i % 3)
             card.update_snapshot(dev, i + 1)
@@ -465,6 +471,35 @@ class MainWindow(QMainWindow):
         result = self.controller.stop_device(serial)
         if not result.get("ok"):
             QMessageBox.warning(self, "停止失败",
+                                result.get("error", "未知错误"))
+
+    def _on_reidentify_device(self, serial: str):
+        """单设备「重新识别」— 检测手机真实页面并提示建议步骤。"""
+        card = self._cards.get(serial)
+        if card is None:
+            return
+        result = self.controller.reidentify(serial)
+        if result.get("ok"):
+            card.show_notice(f"识别: {result.get('page')}"
+                             f" → 建议 {result.get('suggested')}")
+        else:
+            card.show_notice(f"⚠ {result.get('error', '未知错误')}")
+
+    def _on_reset_device(self, serial: str):
+        """设备环境重置 — 二次确认后仅重置当前选中设备(规格 §1/§2)。"""
+        snap = self.controller.snapshot()
+        dev = next((d for d in snap["devices"]
+                    if d["serial"] == serial), None) or {}
+        dlg = ResetConfirmDialog(dev.get("model") or "-",
+                                 dev.get("account") or "—",
+                                 dev.get("worker_state") or "—",
+                                 self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        result = self.controller.reset_device_environment(
+            serial, include_browser=dlg.include_browser)
+        if not result.get("ok"):
+            QMessageBox.warning(self, "无法重置",
                                 result.get("error", "未知错误"))
 
     def _on_rescan(self):

@@ -77,3 +77,10 @@ class CheckpointStore:
                 p.unlink()
             except OSError:
                 pass
+
+    def clear(self, serial: str) -> None:
+        """清除单台设备的临时恢复点(设备环境重置用; 其他设备不动)。"""
+        try:
+            self._path(serial).unlink(missing_ok=True)
+        except OSError:
+            pass

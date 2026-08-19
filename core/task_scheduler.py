@@ -230,19 +230,26 @@ class TaskScheduler:
         except Exception as e:
             return None, str(e)
 
-    def stop_device(self, serial: str) -> dict:
-        """停止单台设备 Worker"""
+    def stop_device(self, serial: str, reason: str = "") -> dict:
+        """停止单台设备 Worker。
+
+        reason 传给 Worker 的 _shutdown, 作为在途账号的归还原因
+        (如 "DEVICE_RESET")。join 在锁外执行: 最长 30s 的等待
+        不阻塞其他设备的 start/stop(单设备停止/重置不影响他机)。
+        """
         with self._lock:
             worker = self._workers.pop(serial, None)
+            self._runtimes.pop(serial, None)   # 清临时运行状态
             if worker is None:
                 return {"ok": False, "error": "worker not running"}
             # 让 Worker 退出循环；其 finally 会归还账号
-            worker.request_stop()
-            worker.join(timeout=30)
+            worker.request_stop(reason)
+        worker.join(timeout=30)
+        with self._lock:
             device = self.devices.get_device(serial)
             if device is not None and device.status == DeviceStatus.RUNNING:
                 device.status = DeviceStatus.READY
-            return {"ok": True}
+        return {"ok": True}
 
     def restart_device(self, serial: str) -> dict:
         self.stop_device(serial)
