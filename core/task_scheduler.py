@@ -137,11 +137,17 @@ class TaskScheduler:
         logger.info(f"[调度器] Worker 已启动: {serial}")
 
     def stop(self):
-        """优雅停止：所有 Worker 归还账号后退出"""
+        """优雅停止：所有 Worker 归还账号后退出
+
+        每个 Worker 最多等 5s — 多设备串行总等待有界(2 台 ≤10s), 避免
+        关闭时主进程被 worker 的长任务(登录/执行步骤)拖住数十秒触发
+        "未响应"。超时未退出的 worker 线程为 daemon, 随进程退出; 账号
+        状态由下次启动的 stale recovery 兜底(绝不静默丢号)。
+        """
         with self._lock:
             self._stop_event.set()
             for w in self._workers.values():
-                w.join(timeout=30)
+                w.join(timeout=5)
             self._workers.clear()
             self.running = False
         logger.info("[调度器] 已停止")

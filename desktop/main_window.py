@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import os
 import time
+import threading
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QCoreApplication
 from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QGridLayout,
                                QGroupBox, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPlainTextEdit,
@@ -733,5 +734,25 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
-        self.controller.shutdown()
+        # shutdown 可能因 scheduler.stop() join 每个 worker(最长 30s/台)
+        # 串行阻塞数十秒 — 在 GUI 主线程同步等会被 Windows 判"未响应"。
+        # 改: 后台 daemon 线程跑 shutdown, 主线程有界等待并持续处理事件
+        # 保持窗口可响应; 超时则放弃等待, daemon 线程随进程退出, 下次启动
+        # 有 stale recovery 兜底(绝不静默丢号)。
+        done = threading.Event()
+
+        def _shutdown_in_background():
+            try:
+                self.controller.shutdown()
+            except Exception:
+                pass
+            done.set()
+
+        threading.Thread(target=_shutdown_in_background, daemon=True,
+                         name="app-shutdown").start()
+        deadline = time.time() + 5.0
+        while not done.is_set() and time.time() < deadline:
+            # 维持事件循环: 让窗口继续响应、避免"未响应"
+            QCoreApplication.processEvents()
+            time.sleep(0.05)
         event.accept()
