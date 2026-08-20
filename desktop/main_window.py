@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
         self.controller = controller
         self.bus = bus
         self.setWindowTitle(APP_TITLE)
-        self.resize(1080, 820)
+        self.resize(1200, 900)
         self._cards: dict[str, DeviceCard] = {}
         self._env_cache: dict = {}
         self._env_cache_ts = 0.0
@@ -99,7 +99,9 @@ class MainWindow(QMainWindow):
         devices_layout = QVBoxLayout(devices_box)
         self.devices_scroll = QScrollArea()
         self.devices_scroll.setWidgetResizable(True)
-        self.devices_scroll.setMinimumHeight(170)
+        # v1.2.0 卡片含队列表格+加号行, 高度 ~400px: 最小高度必须能
+        # 露出「账号/密码/添加」行, 否则加号功能被折叠进滚动区看不到
+        self.devices_scroll.setMinimumHeight(360)
         self.devices_container = QWidget()
         self.devices_grid = QGridLayout(self.devices_container)
         self.devices_grid.setContentsMargins(4, 4, 4, 4)
@@ -172,10 +174,12 @@ class MainWindow(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(GUI_MAX_LOG_LINES)
+        # 日志区限高: 把纵向空间让给设备卡片(账号/密码添加行必须可见)
+        self.log_view.setMaximumHeight(140)
         self.log_view.setStyleSheet(
             "font-family: Consolas, 'Courier New', monospace; font-size: 12px;")
         log_layout.addWidget(self.log_view)
-        root.addWidget(log_box, 2)
+        root.addWidget(log_box, 0)
 
         # ── 底部 ──
         bottom = QHBoxLayout()

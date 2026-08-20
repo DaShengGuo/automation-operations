@@ -139,8 +139,15 @@ class DeviceCard(QFrame):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setMinimumHeight(96)
-        self.table.setMaximumHeight(200)
+        self.table.setMinimumHeight(80)
+        self.table.setMaximumHeight(160)
+        # 空表 viewport 在某些 Qt 样式下默认深灰底, 视觉上像"黑块";
+        # 显式白底 + 网格线, 让"等待账号列表"区一目了然。
+        self.table.setStyleSheet(
+            "QTableWidget { background: #ffffff; border: 1px solid #bdbdbd; }"
+            "QHeaderView::section { background: #f5f5f5; padding: 4px; "
+            "border: none; border-right: 1px solid #e0e0e0; "
+            "border-bottom: 1px solid #bdbdbd; font-weight: bold; }")
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
@@ -148,7 +155,18 @@ class DeviceCard(QFrame):
         layout.addWidget(self.table)
 
         # 加号行(第 5 节): 账号 / 密码(默认隐藏 + 👁) / 插到队首 / 添加
-        add_row = QHBoxLayout()
+        # 带边框 + 行标题, 视觉醒目到不可能被忽略(v1.2.0 用户反馈:
+        # "里面没有账号密码添加功能" — 加号行被空表深色块/低对比占位符淹没)
+        add_box = QFrame()
+        add_box.setObjectName("addBox")
+        add_box.setStyleSheet(
+            "QFrame#addBox { border: 1px solid #90caf9; border-radius: 4px; "
+            "background: #f5fbff; }")
+        add_row = QHBoxLayout(add_box)
+        add_row.setContentsMargins(8, 6, 8, 6)
+        add_label = QLabel("➕ 添加账号到本设备队列")
+        add_label.setStyleSheet(
+            "color: #0d47a1; font-weight: bold; font-size: 12px;")
         self.add_user = QLineEdit()
         self.add_user.setPlaceholderText("账号")
         self.add_user.setMinimumWidth(150)
@@ -166,17 +184,21 @@ class DeviceCard(QFrame):
         self.front_check.setToolTip(
             "插到队首: 当前账号完成后的下一条执行(不打断当前账号)")
         self.add_btn = QPushButton("添加")
+        self.add_btn.setStyleSheet(
+            "background: #2e7d32; color: white; border-radius: 3px; "
+            "font-weight: bold; padding: 2px 12px;")
         self.add_btn.clicked.connect(self._on_add_clicked)
         self.batch_btn = QPushButton("批量添加")
         self.batch_btn.clicked.connect(
             lambda: self.batch_requested.emit(self.serial))
+        add_row.addWidget(add_label)
         add_row.addWidget(self.add_user, 2)
         add_row.addWidget(self.add_pwd, 2)
         add_row.addWidget(self.pwd_eye)
         add_row.addWidget(self.front_check)
         add_row.addWidget(self.add_btn)
         add_row.addWidget(self.batch_btn)
-        layout.addLayout(add_row)
+        layout.addWidget(add_box)
 
         # 队列编辑行(作用于表格选中行)
         edit_row = QHBoxLayout()
