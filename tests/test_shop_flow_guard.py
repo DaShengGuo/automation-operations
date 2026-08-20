@@ -248,7 +248,7 @@ class AuthFailAutomation:
         self.calls.append("detect_page")
         return self._page
 
-    def wait_home(self, timeout):
+    def wait_home(self, timeout=None):
         # 认证失败: 弹窗 OK 后回到登录页 → 要求快速重走登录
         if self.login_calls >= 2:
             self._page = PageState.HOME

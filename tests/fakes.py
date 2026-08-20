@@ -117,7 +117,7 @@ class ScriptedAutomation:
         self.calls.append("detect_page")
         return PageState.HOME if self.login_done else PageState.LOGIN
 
-    def wait_home(self, timeout):
+    def wait_home(self, timeout=None):
         return True
 
     def handle_popups(self):
