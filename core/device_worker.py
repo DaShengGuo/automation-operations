@@ -106,6 +106,9 @@ class DeviceWorker(threading.Thread):
         self._result: Optional[TaskResult] = None
         self._task_retries_left = 0
         self._login_retries_left = 0
+        # 页级异常恢复预算(§15): 每账号最多 MAX_PAGE_RECOVERY_ROUNDS 轮,
+        # 超限 → 账号 RETRY, 绝不整机无限重启(§16)。
+        self._page_recovery_rounds = 0
         self._last_anomaly = AnomalyType.NONE
         self._last_qq_fetch_ts: float = 0.0
         self._qq_fetch_cooldown: float = 60.0  # QQ 取号冷却(秒)
@@ -240,6 +243,7 @@ class DeviceWorker(threading.Thread):
                                   retry_count=account.retry_count)
         self._task_retries_left = self.cfg.retry_for("task")
         self._login_retries_left = self.cfg.retry_for("login")
+        self._page_recovery_rounds = 0   # 每账号重置(§15)
         self._login_done = False            # 本周期是否已登录本账号
         self._session_reset_attempts = 0    # 残留会话登出尝试(防死循环)
         self._ensure_session()
@@ -615,18 +619,27 @@ class DeviceWorker(threading.Thread):
             self._build_watchdog()
 
     def _wire_automation(self):
-        """把心跳回调注入自动化长等待循环(登录/认证可达 60-120s)。
+        """把心跳/性能回调注入自动化长等待循环(登录/认证可达 60-120s)。
 
         真机 run 实测: 登录阻塞期间心跳停摆 → 调度器误判 WORKER_STALLED
         重建 Worker → 重试被打断 + 账号白冷却 2 分钟 + 全程 6 分钟卡在
         选号页。长等待循环每轮调用回调刷新 last_action_ts 即可消除误判。
+        tracer_cb(§17): 登录子步骤事件写入 PerformanceTracer,
+        stages 自动产出 REGISTER_SELECT/LOGIN 各段耗时。
         """
         cb = lambda: setattr(self, "last_action_ts", time.time())
+
+        def _tracer_cb(event: str):
+            if self._tracer is not None:
+                self._tracer.mark(event)
+
         for obj in (self.automation,
                     getattr(self.automation, "web", None),
                     getattr(self.automation, "detector", None)):
             if obj is not None:
                 obj.heartbeat_cb = cb
+                if hasattr(obj, "tracer_cb"):
+                    obj.tracer_cb = _tracer_cb
 
     def _ensure_watchdog(self) -> Watchdog:
         """获取 watchdog（首次调用时构建并注入恢复回调）"""
@@ -639,13 +652,29 @@ class DeviceWorker(threading.Thread):
                       self.devices.adb, self.cfg.game_package)
         # 回调全部经 self.automation 延迟解析，automation 重建后仍有效
         wd.on_redetect = lambda: (self.automation.detect_page(), True)[1]
-        wd.on_back = lambda: (self.controller.press("back"), True)[1]
+        wd.on_back = self._watchdog_back  # 守卫版 BACK(注册页禁按)
         wd.on_popups = lambda: (self.automation.handle_popups(), True)[1]
         wd.on_go_home = lambda: self.automation.recover()
         wd.on_restart_app = lambda: self.automation.restart()
         wd.on_reset_u2 = self._reset_u2
         wd.on_reconnect_adb = self._reconnect_adb
         self.watchdog = wd
+
+    def _watchdog_back(self) -> bool:
+        """watchdog L2 BACK — 守卫版: 注册页等全屏页面按 BACK=退出游戏。
+
+        真机教训: 注册页检测失败(UNKNOWN)时无脑按 BACK 会直接退游戏,
+        watchdog 随即判 APP_CRASHED 重启, 形成无限重启循环。
+        """
+        guarded = getattr(self.automation, "press_back_guarded", None)
+        if callable(guarded):
+            return guarded()
+        try:
+            self.controller.press("back")
+        except Exception:
+            pass
+        time.sleep(1.5)
+        return True
 
     def _reset_u2(self) -> bool:
         """Level 6: 重连 uiautomator2 并重建自动化实例"""
@@ -678,27 +707,83 @@ class DeviceWorker(threading.Thread):
         self.fsm.force(WorkerState.RECOVERY)
         self._set_state(WorkerState.RECOVERY)
 
+    # 页级异常(§9): 状态感知恢复 — 先页面专用恢复, 绝不升级到设备级
+    _PAGE_ANOMALIES = {AnomalyType.PAGE_STUCK, AnomalyType.PAGE_UNKNOWN,
+                       AnomalyType.LOAD_TIMEOUT, AnomalyType.NETWORK_ERROR}
+    MAX_PAGE_RECOVERY_ROUNDS = 3   # 每账号页级恢复预算(§15)
+
+    def _try_page_recovery(self) -> bool:
+        """注册选择页/登录方式页专用恢复(不重启、守卫 BACK)。"""
+        fn = getattr(self.automation, "recover_login_page", None)
+        if not callable(fn):
+            return False
+        try:
+            if fn():
+                self.log.info("页面专用恢复成功(登录页)")
+                return True
+        except Exception as e:
+            self.log.warning(f"页面专用恢复异常: {e}")
+        return False
+
     def _recovery_step(self):
-        ok, level = self._ensure_watchdog().recover(self._last_anomaly)
+        anomaly = self._last_anomaly
+        page_level = anomaly in self._PAGE_ANOMALIES
+
+        # 预算检查(§15/§16): 页级异常恢复轮数超限 → 账号 RETRY,
+        # 保存诊断截图, 继续下一账号 — 绝不整机无限重启。
+        if page_level:
+            self._page_recovery_rounds += 1
+            if self._page_recovery_rounds > self.MAX_PAGE_RECOVERY_ROUNDS:
+                error = f"{anomaly.value}_STUCK"
+                self.log.error(f"[恢复预算] {anomaly.value} 恢复 "
+                               f"{self.MAX_PAGE_RECOVERY_ROUNDS} 轮未果, "
+                               f"账号 {self.account.masked() if self.account else '?'} RETRY")
+                self._capture_evidence(
+                    error, f"page recovery budget exhausted "
+                           f"anomaly={anomaly.value} "
+                           f"state={self.fsm.state.value}")
+                self._mark_account_retry(error)
+                return
+
+        # 页级异常: 先页面专用恢复(不重启/不按 BACK)
+        if page_level and self._try_page_recovery():
+            self.fsm.force(WorkerState.DETECT_PAGE)
+            self._enter_state(WorkerState.DETECT_PAGE)
+            return
+
+        # 通用 watchdog 分级恢复 — 页级异常最多到 L5(重启 APP),
+        # 不越级做 u2/ADB 重连(§9 状态感知恢复)
+        max_level = 5 if page_level else 8
+        ok, level = self._ensure_watchdog().recover(anomaly,
+                                                    max_level=max_level)
         if ok:
             self.log.info(f"恢复成功(Level {level})，重新识别页面")
             self.fsm.force(WorkerState.DETECT_PAGE)
             self._enter_state(WorkerState.DETECT_PAGE)
-        else:
-            self.log.error(f"恢复失败(Level {level})，设备标记 DEVICE_ERROR")
-            self._capture_evidence("RECOVERY_FAILED",
-                                   f"watchdog level {level}")
-            device = self.devices.get_device(self.serial)
-            if device is not None:
-                device.status = DeviceStatus.DEVICE_ERROR
-            if self.account:
-                self.accounts.release(self.account.id,
-                                      "device recovery failed")
-                self._finish_result(TaskRunState.ABORTED, "RECOVERY",
-                                    "watchdog 恢复失败")
-            self.runtime.error = "watchdog recovery failed"
-            self._next_account()
-            self._set_state(WorkerState.IDLE)
+            return
+        if page_level:
+            # 页级异常恢复失败: 不标记设备错误(§16), 账号 RETRY 继续下一账号
+            error = f"{anomaly.value}_STUCK"
+            self.log.error(f"[恢复] {error} (Level {level}) — 账号 RETRY")
+            self._capture_evidence(error,
+                                   f"watchdog level {level} failed "
+                                   f"anomaly={anomaly.value}")
+            self._mark_account_retry(error)
+            return
+        self.log.error(f"恢复失败(Level {level})，设备标记 DEVICE_ERROR")
+        self._capture_evidence("RECOVERY_FAILED",
+                               f"watchdog level {level}")
+        device = self.devices.get_device(self.serial)
+        if device is not None:
+            device.status = DeviceStatus.DEVICE_ERROR
+        if self.account:
+            self.accounts.release(self.account.id,
+                                  "device recovery failed")
+            self._finish_result(TaskRunState.ABORTED, "RECOVERY",
+                                "watchdog 恢复失败")
+        self.runtime.error = "watchdog recovery failed"
+        self._next_account()
+        self._set_state(WorkerState.IDLE)
 
     def _recover_with_watchdog(self, anomaly: AnomalyType,
                                from_exception: str = ""):

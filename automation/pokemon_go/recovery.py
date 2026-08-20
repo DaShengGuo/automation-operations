@@ -71,9 +71,9 @@ class PokemonGoRecovery:
         return self.a.handle_initial_pages() or True
 
     def _level4(self) -> bool:
-        """BACK"""
-        self.d.press("back")
-        time.sleep(2)
+        """BACK(带守卫: 注册页等全屏页面按 BACK=退出游戏, 禁止)"""
+        if not self.a.press_back_guarded():
+            return False
         return self.detector.detect() != PokemonGoState.UNKNOWN or True
 
     def _level5(self) -> bool:

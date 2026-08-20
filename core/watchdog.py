@@ -142,14 +142,19 @@ class Watchdog:
 
     # ── 恢复 ──
 
-    def recover(self, anomaly: AnomalyType) -> tuple[bool, int]:
+    def recover(self, anomaly: AnomalyType,
+                max_level: int = 8) -> tuple[bool, int]:
         """按异常对应的等级执行恢复。返回 (是否恢复, 使用的等级)。
 
-        等级内失败 → 逐级升级，直到 Level 8 或成功。
+        等级内失败 → 逐级升级，直到 max_level 或成功。
         每次尝试之间短等待，禁止无限重试。
+
+        max_level: 页级异常(PAGE_STUCK/PAGE_UNKNOWN/LOAD_TIMEOUT/
+        NETWORK_ERROR)由 Worker 传 5 — 最多到重启 APP, 不越级做
+        u2/ADB 重连; 设备级异常保持 8(§9 状态感知恢复)。
         """
         level = ANOMALY_LEVEL.get(anomaly, 1)
-        while level <= 8:
+        while level <= max_level:
             ok = self._execute_level(level)
             if ok:
                 logger.info(f"[Watchdog] {self.serial} 恢复成功 "
@@ -160,16 +165,17 @@ class Watchdog:
                            f"升级到 Level {level + 1}")
             level += 1
             time.sleep(2)
-        logger.error(f"[Watchdog] {self.serial} 恢复失败(Level 8)，设备标记异常")
-        return False, 8
+        logger.error(f"[Watchdog] {self.serial} 恢复失败"
+                     f"(Level {max_level})，交由 Worker 处理")
+        return False, max_level
 
     def _execute_level(self, level: int) -> bool:
         try:
             if level == 1:
                 return self.on_redetect()
             if level == 2:
-                self.d.press("back")
-                time.sleep(1.5)
+                # BACK 动作由 on_back 回调执行 — Worker 注入守卫版
+                # (注册页等全屏页面按 BACK=退出游戏, 禁止误退)
                 return self.on_back()
             if level == 3:
                 return self.on_popups()

@@ -22,6 +22,7 @@ from automation.base_game import BaseGameAutomation, LoginResult, TaskOutcome
 from automation.pokemon_go.detector import PokemonGoPageDetector
 from automation.pokemon_go.logout import LogoutAutomation
 from automation.pokemon_go.recovery import PokemonGoRecovery
+from automation.pokemon_go.register_recovery import RegisterRecoveryHandler
 from automation.pokemon_go.selectors import PokemonGoSelectors
 from automation.pokemon_go.shop import ShopAutomation
 from automation.pokemon_go.states import PgoLoginResult, PokemonGoState
@@ -68,7 +69,25 @@ class PokemonGoAdapter(BaseGameAutomation):
         self.shop_auto = ShopAutomation(self)
         self.logout_auto = LogoutAutomation(self)
         self.recovery_auto = PokemonGoRecovery(self)
+        # 注册选择页专用恢复(§10): 分级递进, 不含重启
+        rcfg = (cfg.game.get("register_recovery") or {})
+        self.register_recovery = RegisterRecoveryHandler(
+            self,
+            max_rounds=int(rcfg.get("max_rounds", 3)),
+            click_retries=int(rcfg.get("click_retries", 2)),
+            anti_double_click_sec=float(
+                rcfg.get("anti_double_click_sec", 3.0)),
+            redetect_wait=float(rcfg.get("redetect_wait", 30.0)),
+            reenter_wait=float(rcfg.get("reenter_wait", 60.0)),
+            settle_wait=float(rcfg.get("settle_wait", 5.0)),
+            click_verify_wait=float(rcfg.get("click_verify_wait", 30.0)))
         self._screenshots: list[str] = []
+        # 诊断/防连点状态
+        self._active_account = ""          # 当前登录账号(脱敏, 供诊断)
+        self.last_action = "init"
+        self.last_action_ts = time.time()
+        self._last_click_ts = 0.0
+        self.tracer_cb = None              # Worker 注入(PerformanceTracer.mark)
 
     # ── 通用接口映射 ──
 
@@ -293,13 +312,14 @@ class PokemonGoAdapter(BaseGameAutomation):
                 return True
             shot = None  # 屏幕已变, 重新截图找下一个候选
 
-        # 2) BACK 兜底(部分系统/游戏弹窗按返回即关)
-        self.log.info("[弹窗] 通用关闭词无效 — BACK 兜底")
-        try:
-            self.d.press("back")
-        except Exception:
-            pass
-        time.sleep(2)
+        # 2) BACK 兜底(部分系统/游戏弹窗按返回即关)。
+        #    守卫(§14): 注册页等全屏页面按 BACK=退出游戏, 无弹窗证据不按 —
+        #    否则「检测失败→按BACK→游戏退出→watchdog重启」无限循环。
+        self.log.info("[弹窗] 通用关闭词无效 — BACK 兜底(带守卫)")
+        if not self.press_back_guarded():
+            self.capture_keyframe("UNKNOWN_POPUP_NO_BACK")
+            self.log.warning("[弹窗] BACK 被守卫拒绝(全屏页面) — 交注册页恢复流程")
+            return False
         if self.detector.detect() != PokemonGoState.UNKNOWN:
             self.log.info("[弹窗] BACK 关闭成功")
             return True
@@ -335,6 +355,9 @@ class PokemonGoAdapter(BaseGameAutomation):
 
         返回通用 LoginResult(Worker 状态机消费)。
         """
+        self._active_account = account.masked()
+        self.last_action = "login_start"
+        self.last_action_ts = time.time()
         # 已在地图 = 已登录
         if self.detect_state() == PokemonGoState.MAP:
             return LoginResult.ALREADY_LOGGED_IN
@@ -354,9 +377,11 @@ class PokemonGoAdapter(BaseGameAutomation):
                 return LoginResult.UNKNOWN
             time.sleep(2)
 
-        # 1. 已註冊的玩家
+        # 1. 已註冊的玩家(§14: 点击失败不直接重启 — 先走注册页分级恢复)
         if not self.click_returning_player():
-            return LoginResult.TIMEOUT
+            if not self.register_recovery.recover():
+                self.log.error("[登录] 注册选择页分级恢复失败, 交由 Worker 预算决定")
+                return LoginResult.TIMEOUT
 
         # 2. 登录方式页 → 点寶可夢訓練家中心。
         #    真机观察: 游戏记住上次登录方式(PTC)时, RETURNING_PLAYER 之后
@@ -371,6 +396,7 @@ class PokemonGoAdapter(BaseGameAutomation):
                 break  # 已自动跳浏览器
             time.sleep(2)
         if state == PokemonGoState.LOGIN_PROVIDER:
+            self._mark_trace("LOGIN_PROVIDER_FOUND")
             if not self.click_ptc_provider(timeout=15):
                 return LoginResult.UNKNOWN
 
@@ -440,29 +466,156 @@ class PokemonGoAdapter(BaseGameAutomation):
     # ── 登录子步骤 ──
 
     def click_returning_player(self, timeout: float = 30) -> bool:
-        """点击「已註冊的玩家」。成功标准: LOGIN_PROVIDER 出现"""
-        if self.detect_state() == PokemonGoState.LOGIN_PROVIDER:
+        """点击「已註冊的玩家」并验证页面前进(§6)。
+
+        成功标准: LOGIN_PROVIDER / GAME_LOADING 出现(或外部上下文 —
+        游戏记住上次登录方式直接跳浏览器)。点击本身失败返回 False,
+        由调用方(login)转入注册页分级恢复, 不在此重启。
+        """
+        if self.detect_state() in (PokemonGoState.LOGIN_PROVIDER,
+                                   PokemonGoState.GAME_LOADING):
             return True
+        # or_states: 页面已在后继状态(人工点过/竞态) → 立即返回, 不白等(§5)
         state = self.detector.wait_for_state(
-            [PokemonGoState.RETURNING_PLAYER], timeout=timeout)
-        if state != PokemonGoState.RETURNING_PLAYER:
+            [PokemonGoState.REGISTER_SELECT], timeout=timeout,
+            or_states=(PokemonGoState.LOGIN_PROVIDER,
+                       PokemonGoState.GAME_LOADING))
+        if state in (PokemonGoState.LOGIN_PROVIDER,
+                     PokemonGoState.GAME_LOADING):
+            return True
+        if state != PokemonGoState.REGISTER_SELECT:
             self.log.warning(f"[登录] 未出现已註冊的玩家页(当前={state.value})")
             return False
         self.capture_keyframe("RETURNING_PLAYER")
-        clicked = self.click_ocr_text(
-            self._entry_texts("returning_player") or
-            ["已", "玩家"], timeout=10, require_all=True)
-        if not clicked:
-            clicked = self.click_template("pgo_returning_player_btn",
-                                          timeout=5)
-        if not clicked:
-            self.log.warning("[登录] 未能点击已註冊的玩家")
+        self._mark_trace("RETURNING_PLAYER_FOUND")
+        if not self.click_existing_account():
+            self.log.warning("[登录] 未能定位/点击已註冊的玩家")
             return False
-        state = self.detector.wait_for_state(
-            [PokemonGoState.LOGIN_PROVIDER, PokemonGoState.GAME_LOADING],
-            timeout=30)
-        return state in (PokemonGoState.LOGIN_PROVIDER,
-                         PokemonGoState.GAME_LOADING)
+        # §6: 点击后必须验证页面变化, 不默认成功
+        return self.register_recovery.wait_login_page(timeout=timeout)
+
+    def click_existing_account(self) -> bool:
+        """点击「已注册」— 点击阶梯(§11): 定位(OCR 跨块→模板→校准坐标)
+        × 传输(u2 click→adb tap)。每次只发一次点击, 返回是否发出。
+
+        防连点(§12): anti_double_click_sec 内同一入口拒绝重复点击,
+        连点会让注册页动画/状态异常。页面是否前进由调用方验证(§6)。
+        """
+        now = time.time()
+        if now - self._last_click_ts < \
+                self.register_recovery.anti_double_click_sec:
+            self.log.debug("[点击] 防连点: 距上次点击不足 3s, 跳过")
+            return False
+        pos = self._locate_returning_player_button()
+        if pos is None:
+            return False
+        x, y = pos
+        self.log.info(f"[点击] 已注册 @({x},{y})")
+        if not self._tap(x, y):
+            self.log.warning("[点击] 全部点击通道失败(u2/adb)")
+            return False
+        self._last_click_ts = time.time()
+        self.last_action = f"click_existing@({x},{y})"
+        self.last_action_ts = time.time()
+        self._mark_trace("REGISTER_CLICKED")
+        return True
+
+    def _locate_returning_player_button(self):
+        """定位「已注册」按钮中心坐标。OCR(跨块)→模板→校准坐标(仅配置)。"""
+        box = self.detector.find_text_box(
+            self._entry_texts("returning_player") or ["已", "玩家"],
+            require_all=True)
+        if box is not None:
+            return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+        matcher = getattr(self.d, "matcher", None)
+        if matcher is not None:
+            try:
+                shot = self.d.screenshot()
+                pos = matcher.find("pgo_returning_player_btn", shot)
+                if pos is not None:
+                    return pos
+            except Exception:
+                pass
+        # 校准坐标: 仅 operator 在 yaml 显式配置过才用(禁止编造坐标)
+        ratio = self.sel.ptc.get("returning_player_ratio")
+        if ratio and len(ratio) == 2:
+            w = getattr(self.d, "screen_w", 0)
+            h = getattr(self.d, "screen_h", 0)
+            if w > 0 and h > 0:
+                return int(ratio[0] * w), int(ratio[1] * h)
+        return None
+
+    def _tap(self, x: int, y: int) -> bool:
+        """点击传输阶梯: u2 click → adb input tap(§11)"""
+        try:
+            self.d.click(x, y)
+            return True
+        except Exception:
+            pass
+        adb = getattr(self.d, "adb", None)
+        if adb is not None and hasattr(adb, "tap"):
+            try:
+                adb.tap(self.d.serial, x, y)
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _mark_trace(self, event: str):
+        """性能事件(§17): Worker 注入 tracer_cb 后写入 PerformanceTracer"""
+        cb = getattr(self, "tracer_cb", None)
+        if cb:
+            try:
+                cb(event)
+            except Exception:
+                pass
+
+    def recover_login_page(self) -> bool:
+        """登录页(注册选择/登录方式)专用恢复 — Worker 页面级恢复优先调用。
+
+        不重启、不按 BACK(§14): 注册页 BACK 会退出游戏。
+        """
+        if self.detect_state() in (PokemonGoState.LOGIN_PROVIDER,
+                                   PokemonGoState.GAME_LOADING):
+            return True
+        return self.register_recovery.recover()
+
+    def back_safe(self) -> bool:
+        """BACK 安全守卫(§7/§14): 全屏主页面按 BACK = 退出游戏, 禁止。
+
+        UNKNOWN 页仅当存在弹窗特征(短文本按钮候选)才允许 BACK。
+        注册页检测失败(UNKNOWN)且无弹窗特征 → 拒绝 BACK, 交给
+        注册页恢复流程, 绝不误退游戏。
+        """
+        state = self.detect_state()
+        if state in (PokemonGoState.RETURNING_PLAYER,
+                     PokemonGoState.GAME_SPLASH, PokemonGoState.MAP,
+                     PokemonGoState.MAIN_MENU, PokemonGoState.SETTINGS,
+                     PokemonGoState.SHOP):
+            self.log.warning(f"[BACK守卫] 全屏页面 {state.value} 不按 BACK")
+            return False
+        if state == PokemonGoState.UNKNOWN:
+            try:
+                boxes = self.detector.ocr_boxes()
+            except Exception:
+                boxes = []
+            has_buttonish = any(0 < len(t.strip()) <= 8
+                                for t, _ in boxes)
+            if not has_buttonish:
+                self.log.warning("[BACK守卫] UNKNOWN 页无弹窗特征, 不按 BACK")
+                return False
+        return True
+
+    def press_back_guarded(self) -> bool:
+        """带守卫的 BACK — 所有恢复路径统一入口"""
+        if not self.back_safe():
+            return False
+        try:
+            self.d.press("back")
+        except Exception:
+            return False
+        time.sleep(2)
+        return True
 
     def click_ptc_provider(self, timeout: float = 30) -> bool:
         """点击「寶可夢訓練家中央站」。成功标准: 离开游戏(外部上下文)"""

@@ -32,6 +32,16 @@ timeouts:
   purchase_manual: 300     # manual 模式人工确认等待
   logout_verify: 60        # 退出后验证 RETURNING_PLAYER
 
+# 注册选择页(RETURNING_PLAYER/REGISTER_SELECT)恢复参数 — §10/§15
+# 分级恢复(不含重启): L1 重检等待 / L2 重dump / L3 重点击(≤2次,3s防连点)
+# / L4 暖切回前台。全部失败由 Worker 页级恢复预算(3 轮)决定 restart 或账号 RETRY。
+register_recovery:
+  max_rounds: 3
+  click_retries: 2
+  anti_double_click_sec: 3.0
+  redetect_wait: 30
+  reenter_wait: 60
+
 # ── 页面识别规则(检测顺序 = 定义顺序) ──────────────────────
 # ocr_rules: 关键词组列表(组内 AND, 组间 OR)。片段匹配以容忍
 #            OCR 对繁体字的识别误差(如 註→册、寶→貴)。
@@ -136,6 +146,8 @@ states:
     ocr_rules:
       - [已, 玩家]           # 已註冊的玩家
       - [已经, 玩家]
+      - [已註冊, 玩家]       # OCR 整块识别变体
+      - [已注册, 玩家]       # 简体客户端
       - [Returning, Player]
       - [尚未, 玩家]
       - [New, Player]

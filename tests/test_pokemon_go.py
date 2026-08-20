@@ -541,7 +541,12 @@ class TestAdapter:
         assert adapter.detector.detect() == PokemonGoState.MAIN_MENU
 
     def test_unknown_popup_back_fallback(self, cfg, monkeypatch):
-        """无通用关闭词 → BACK 兜底关闭"""
+        """无按钮候选(纯正文) → BACK 守卫拒绝, 截图留档交 RECOVERY。
+
+        回归: 注册选择页检测失败(UNKNOWN 全屏页面, 无弹窗证据)时
+        无脑按 BACK = 退出游戏 → watchdog 判 APP_CRASHED 重启,
+        形成无限重启循环(客户实况)。守卫只允许「有弹窗特征」的 BACK。
+        """
         from automation.pokemon_go.adapter import PokemonGoAdapter
         state = {"popup": True}
         ctrl = self._make_popup_ctrl(
@@ -552,12 +557,12 @@ class TestAdapter:
 
         def press(key):
             ctrl.pressed.append(key)
-            state["popup"] = False  # BACK 后弹窗消失
+            state["popup"] = False  # BACK 后弹窗消失(守卫拒绝 → 不触发)
 
         ctrl.press = press
         adapter = PokemonGoAdapter(ctrl, cfg)
-        assert adapter._handle_unknown_popup() is True
-        assert ctrl.pressed == ["back"]
+        assert adapter._handle_unknown_popup() is False
+        assert ctrl.pressed == [], "无弹窗证据不得按 BACK(防误退游戏)"
 
     def test_unknown_popup_fails_softly_and_captures(self, cfg, monkeypatch,
                                                      tmp_path):

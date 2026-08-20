@@ -69,6 +69,17 @@ class PokemonGoPageDetector:
 
     # ── 前台应用 ──
 
+    def bust_caches(self):
+        """清空全部检测缓存 — 恢复流程要求以最新截图/dump 重新检测。
+
+        OCR/XML/包名/状态指纹全部强制下轮重取, 避免「截图早已变化
+        但旧缓存仍在复用」导致的假 UNKNOWN(真机卡点)。
+        """
+        self._ocr_cache.update(hash="", ts=0.0, texts=[], boxes=[])
+        self._xml_cache.update(xml="", ts=0.0)
+        self._pkg_cache.update(pkg="", ts=0.0)
+        self._state_cache.update(fp="", state=PokemonGoState.UNKNOWN)
+
     def current_package(self) -> str:
         """当前前台包名(2 秒缓存, 避免每 tick 打一次 dumpsys)"""
         import time as _time
@@ -258,18 +269,37 @@ class PokemonGoPageDetector:
                       ) -> Optional[tuple[int, int, int, int]]:
         """OCR 查找包含关键词的文本块, 返回 (x1,y1,x2,y2)。
 
-        require_all=True:  所有关键词须同现(多片段匹配, 如 [已,玩家])
+        require_all=True:  优先返回单个文本块含全部关键词的;
+                           否则回退到含关键词最多的块(要求所有关键词
+                           至少散布在整屏 OCR 文本中) — 应对 OCR 把
+                           「已註冊的玩家」拆成多块导致整块匹配失败
+                           (真机卡点: 注册页按钮永远点不到)。
         require_all=False: 任一关键词命中(候选变体, 如 [商店,Shop])
         """
         boxes = self.ocr_boxes()
-        for text, bbox in boxes:
-            if require_all:
-                if all(k in text for k in keywords):
-                    return bbox
-            else:
+        if not require_all:
+            for text, bbox in boxes:
                 if any(k in text for k in keywords):
                     return bbox
-        return None
+            return None
+        # require_all: 单块全含优先, 否则整屏散布 + 最多命中块
+        best = None
+        best_hits = 0
+        all_present = True
+        for k in keywords:
+            if not any(k in t for t, _ in boxes):
+                all_present = False
+                break
+        if not all_present:
+            return None
+        for text, bbox in boxes:
+            hits = sum(1 for k in keywords if k in text)
+            if hits > best_hits:
+                best_hits = hits
+                best = bbox
+                if hits == len(keywords):
+                    return bbox
+        return best
 
     # ── 等待类 ──
 
@@ -286,9 +316,15 @@ class PokemonGoPageDetector:
     def wait_for_state(self, states: Sequence[PokemonGoState],
                        timeout: float, interval: float = 0.2,
                        screenshot_each: bool = False,
-                       on_snapshot=None
+                       on_snapshot=None,
+                       or_states: Sequence[PokemonGoState] = ()
                        ) -> PokemonGoState:
-        """等待进入任一状态(快速轮询: 页面一出现立即返回)。"""
+        """等待进入任一状态(快速轮询: 页面一出现立即返回)。
+
+        or_states: 「已经越过目标」的合法状态(目标的后继页)。
+        等待 RETURNING_PLAYER 时页面已到 LOGIN_PROVIDER(人工点过
+        已注册等场景) → 立即返回, 不再白等整段超时后判失败。
+        """
         deadline = time.time() + timeout
         last = PokemonGoState.UNKNOWN
         fast_phase = min(3.0, timeout / 2)
@@ -296,6 +332,8 @@ class PokemonGoPageDetector:
             self._hb()
             last = self.detect()
             if last in states:
+                return last
+            if last in or_states:
                 return last
             if on_snapshot:
                 on_snapshot(last)

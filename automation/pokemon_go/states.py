@@ -15,6 +15,9 @@ class PokemonGoState(str, Enum):
     UNKNOWN = "UNKNOWN"
     GAME_SPLASH = "GAME_SPLASH"                # 启动闪屏(版权页)
     RETURNING_PLAYER = "RETURNING_PLAYER"      # 已註冊的玩家 / 尚未註冊的玩家
+    # 注册选择页别名: 业务术语「已注册/未注册选择页」。与 RETURNING_PLAYER
+    # 同一状态(值相同), 用于诊断日志/恢复代码表达意图, 不引入平行状态。
+    REGISTER_SELECT = "RETURNING_PLAYER"
     LOGIN_FAILED_DIALOG = "LOGIN_FAILED_DIALOG"  # 無法登入弹窗(残留失败会话, 真机: 無法登入/再試一次/以其他帳號登入)
     LOGIN_PROVIDER = "LOGIN_PROVIDER"          # 登录方式选择页
     PTC_REDIRECTING = "PTC_REDIRECTING"        # 已点击PTC, 系统跳转浏览器中
