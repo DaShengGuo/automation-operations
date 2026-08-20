@@ -387,6 +387,10 @@ class DeviceWorker(threading.Thread):
         """进入状态(幂等)：已在目标状态时只刷新超时"""
         if self.fsm.state != state:
             self.fsm.transition(state)
+            # 进入 WAIT_HOME 时重置失败轮次计数(§二: 两轮不进主页
+            # 立即交 RECOVERY, 不再烧满 fsm 预算干等)
+            if state == WorkerState.WAIT_HOME:
+                self._home_fail_rounds = 0
         timeout = self.cfg.state_timeout(state.value.lower())
         self.fsm.set_timeout(timeout)
         # 性能追踪
@@ -512,7 +516,17 @@ class DeviceWorker(threading.Thread):
                     self.fsm.force(WorkerState.DETECT_PAGE)
                     self._enter_state(WorkerState.DETECT_PAGE)
                 else:
-                    time.sleep(0.5)  # 超时兜底(状态超时仍由 fsm 把关)
+                    # §二: 连续两轮 wait_home(内部已含截图+重启重入)
+                    # 仍未进主页 → 立即交 RECOVERY 分级恢复,
+                    # 绝不无限卡住(真机: WAIT_HOME 曾干等 38s)
+                    rounds = getattr(self, "_home_fail_rounds", 0) + 1
+                    self._home_fail_rounds = rounds
+                    if rounds >= 2:
+                        self.log.error("[WAIT_HOME] 连续两轮未进入主页面"
+                                       " — 交 RECOVERY 分级恢复")
+                        self._enter_recovery(AnomalyType.LOAD_TIMEOUT)
+                    else:
+                        time.sleep(0.5)  # 超时兜底(状态超时仍由 fsm 把关)
 
         elif state == WorkerState.HANDLE_POPUPS:
             self.automation.handle_popups()
@@ -629,8 +643,9 @@ class DeviceWorker(threading.Thread):
         self._enter_state(WorkerState.DETECT_PAGE)
 
     def detector_wait_home(self) -> bool:
-        return self.automation.wait_home(
-            timeout=min(self.fsm.timeout_sec, 30))
+        # 步级预算由 adapter.wait_home 从 game yaml budgets.home_wait
+        # (20s) 读取, 内部含超时截图+重启重入, 不再用 fsm 30s 钳制
+        return self.automation.wait_home()
 
     # ── Watchdog 恢复 ──
 

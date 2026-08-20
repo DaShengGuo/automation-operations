@@ -51,29 +51,67 @@ class ShopAutomation:
         self.shop_cfg = self.sel.shop
         self.purchase_cfg = self.sel.purchase
         self.log = adapter.log
+        # 商城异常退出标记(§四): 滑动中检测到首页 UI 出现 → True,
+        # find_product 提前返回 None, 调用方据此重进商城(≤2 次)
+        self.kicked_out = False
 
     # ── 进店 / 离店 ──
 
-    def enter_shop(self, timeout: float = 30, max_wrong_page_retries: int = 1
+    def enter_shop(self, timeout: float = None, max_wrong_page_retries: int = 1
                    ) -> bool:
-        """MAIN_MENU → 点击商店 → 等 SHOP。成功标准: SHOP 出现
+        """MAIN_MENU → 点击商店 → 等 SHOP。成功标准: SHOP 出现(§三)。
 
         主菜单按钮布局(真机实测): 文字标签在上, 图标在下 —
         点击位置 = 文字中心 + entry_click_offset。
 
-        防误入设置守卫: 点击后若检测到 SETTINGS(点偏/OCR 误配),
-        记录 WRONG_PAGE_DETECTED → BACK 回主菜单 → 有界重试。
-        绝不把 SETTINGS 当 SHOP 继续(更不得触发登出 — 登出只属于
-        PURCHASE_SUCCESS 后的 LOGOUT 状态)。
+        步级预算 shop_entry(默认 15s)。点击后只接受三种去向:
+          SHOP      → 成功
+          SETTINGS  → 防误入设置守卫(记录 → BACK 回主菜单 → 重试)
+          MAIN_MENU → 点击未生效 → 重新点击
+          超时(加载中/UNKNOWN) → 截图 + 日志 + 暖启动 + 重试(§五)
+
+        真机教训(2026-08): 旧实现点击失败后在重试循环里调
+        open_main_menu(), 其比例坐标点击 (0.5,0.94) 在商城页恰好命中
+        底部 X 关闭按钮 → 误退商城(客户「自动返回主页面」根因)。
+        现在: 已检测到 SHOP 直接返回(重进场景); 重试循环内绝不调
+        open_main_menu, 只在地图(精灵球安全位)才允许开菜单。
         """
         target = self.shop_cfg.get("entry_texts") or ["商店"]
         offset = self.shop_cfg.get("entry_click_offset") or [0, 160]
+        timeout = timeout or self.a._step_budget("shop_entry", 15)
+        menu_timeout = self.a._step_budget("menu_open", 15)
+        # 已在商城(异常退出后重进场景) → 无需再点
+        if self.detector.detect() == PokemonGoState.SHOP:
+            self.log.info("[步骤] 商城已加载(重进直接使用)")
+            return True
         for attempt in range(max_wrong_page_retries + 1):
-            # 防御: 不在主菜单时先打开(调用者不依赖前置状态)
-            if self.detector.detect() != PokemonGoState.MAIN_MENU:
-                if not self.a.logout_auto.open_main_menu():
-                    self.log.warning("[商店] 无法打开主菜单")
-                    return False
+            state = self.detector.detect()
+            if state == PokemonGoState.SHOP:
+                return True
+            if state != PokemonGoState.MAIN_MENU:
+                if state == PokemonGoState.MAP:
+                    # 地图 → 开主菜单(精灵球点击是安全位, 与商城 X 无关)
+                    if not self.a.logout_auto.open_main_menu(
+                            timeout=menu_timeout):
+                        self.log.warning("[商店] 无法打开主菜单")
+                        return False
+                else:
+                    # 转场/未知页: 先等稳定(绝不点比例坐标 — 可能正
+                    # 处于检测未识别的商城页, 比例坐标会点中 X 关闭)
+                    state = self.detector.wait_for_state(
+                        [PokemonGoState.MAIN_MENU, PokemonGoState.SHOP,
+                         PokemonGoState.MAP], timeout=min(menu_timeout,
+                                                          timeout))
+                    if state == PokemonGoState.SHOP:
+                        return True
+                    if state == PokemonGoState.MAP:
+                        if not self.a.logout_auto.open_main_menu(
+                                timeout=menu_timeout):
+                            return False
+                    if state != PokemonGoState.MAIN_MENU:
+                        self.log.warning(f"[商店] 未回到主菜单"
+                                         f"(当前={state.value}) — 进店失败")
+                        return False
             if attempt > 0:
                 self.log.info(f"[商店] 错误页面恢复后重试进店 "
                               f"第 {attempt}/{max_wrong_page_retries} 次")
@@ -86,6 +124,7 @@ class ShopAutomation:
             if not clicked:
                 self.log.warning("[商店] 未找到商店入口")
                 return False
+            self.detector.bust_caches()   # 事件驱动: 点击后强制全新检测
             # 点击后等待页面变化, 识别实际去向(不假设点击=进店成功)
             state = self.detector.wait_for_state(
                 [PokemonGoState.SHOP, PokemonGoState.SETTINGS,
@@ -99,15 +138,29 @@ class ShopAutomation:
                                  "进入设置页 — BACK 回主菜单重试")
                 self.a.capture_keyframe("WRONG_PAGE_SETTINGS")
                 self.d.press("back")
+                self.detector.bust_caches()
                 self.detector.wait_for_state([PokemonGoState.MAIN_MENU],
-                                             timeout=15)
+                                             timeout=menu_timeout)
                 continue
-            # 仍在主菜单/转场 — 继续等 SHOP
-            state = self.detector.wait_for_state([PokemonGoState.SHOP],
-                                                 timeout=10)
-            if state == PokemonGoState.SHOP:
-                self.a._mark_trace("SHOP_ENTERED")
-                return True
+            if state == PokemonGoState.MAIN_MENU:
+                # 点击未生效(可能加载慢/点击被吞) — 重新点击,
+                # 绝不调 open_main_menu(其比例坐标会点中商城 X 关闭)
+                self.log.info("[商店] 点击商店后仍在主菜单 — 重新点击")
+                continue
+            # 超预算(§五): 截图 + 日志 + 重启APP(暖启动保会话) + 重执行
+            self.a.capture_keyframe("SHOP_ENTRY_TIMEOUT")
+            self.log.warning(f"[商店] 进入商城超时({timeout}s 预算), "
+                             f"当前={state.value} — 截图留档, "
+                             f"暖启动后重试({attempt + 1}/"
+                             f"{max_wrong_page_retries + 1})")
+            if attempt < max_wrong_page_retries:
+                try:
+                    self.d.app_start(self.a.package, self.a.activity)
+                except Exception:
+                    pass
+                time.sleep(3)
+                self.detector.bust_caches()
+                continue
         self.log.error("[商店] 进店失败(多次误入设置或超时)")
         return False
 
@@ -137,8 +190,23 @@ class ShopAutomation:
 
     # ── 滚动寻找商品 ──
 
+    def _shop_still_open(self) -> bool:
+        """商城流程中页面仍在商店内(§四)。
+
+        检测到首页 UI/主菜单/设置/登出确认 = 商城已异常退出 → False。
+        UNKNOWN 视为转场/加载容忍(商店 OCR 未识别的中间态)。
+        """
+        state = self.detector.detect()
+        if state in (PokemonGoState.MAIN_MENU, PokemonGoState.MAP,
+                     PokemonGoState.SETTINGS,
+                     PokemonGoState.LOGOUT_CONFIRM):
+            self.log.warning(f"[商店] 检测到商城外页面: {state.value} "
+                             f"— 商城异常退出")
+            return False
+        return True
+
     def find_product(self, max_scroll: int = 12) -> Optional[ProductInfo]:
-        """滚动直到目标商品出现。
+        """滚动直到目标商品出现(§三/§四)。
 
         真机实测(用户确认): 100 寶可幣在商店列表最底部 —
         策略(两阶段):
@@ -148,9 +216,18 @@ class ShopAutomation:
              纯哈希对比会因计时器每秒跳动永远判不了底);
           2) 到底后再 OCR — 从底部往上 4 屏搜索(商品在最底, 必覆盖);
           3) 仍未找到才回滚兜底。
+
+        异常退出守卫: 滑动中检测到商城外页面立即停止(kicked_out=True),
+        调用方据此重进商城(≤2 次)。滑底阶段预算 shop_scroll, 超预算
+        直接进入搜索阶段, 禁止到底后继续疯狂滑。
         """
+        self.kicked_out = False
         target_amount = str(self.shop_cfg.get("target", {}).get(
             "amount", "100"))
+        scroll_budget = self.a._step_budget("shop_scroll", 15)
+        find_budget = self.a._step_budget("shop_find", 40)
+        self.log.info("[步骤] 开始滑动到底部")
+        t0 = time.time()
 
         # 阶段 1: 快速滑底 + 周期性商品快检 + 容差判底
         last_small = None
@@ -159,6 +236,10 @@ class ShopAutomation:
             self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
             # 商品快检: 商品出现立即停止(用户要求: 看到商品就进行下一步)
             if scroll >= 2 and scroll % 2 == 0:
+                # 异常退出守卫(OCR 已缓存, 状态检测零额外开销)
+                if not self._shop_still_open():
+                    self.kicked_out = True
+                    return None
                 info = self._detect_product(target_amount)
                 if info and info.matched:
                     self.log.info(f"[商店] 找到目标商品: {info.name} "
@@ -183,9 +264,14 @@ class ShopAutomation:
                 stale_count = 0
             last_small = small
             if stale_count >= 2:
-                self.log.info(f"[商店] SHOP_BOTTOM_REACHED "
+                self.log.info(f"[步骤] 商城到底: 连续两次截图无变化 "
                               f"(滚动 {scroll} 次) — 停止滑动")
                 self.a._mark_trace("SHOP_BOTTOM_REACHED")
+                break
+            # 滑底阶段预算: 超时不再滑, 直接进入搜索阶段(§五)
+            if time.time() - t0 > scroll_budget:
+                self.log.warning(f"[商店] 滑底阶段超预算({scroll_budget}s) "
+                                 f"— 停止滑动, 进入搜索阶段")
                 break
             self.log.info(f"[商店] 快速滑底中, 上滑第 {scroll + 1} 次")
             self.d.swipe_direction("up", distance=0.8)
@@ -194,12 +280,19 @@ class ShopAutomation:
         # 阶段 2: 底部往上 4 屏 OCR 搜索
         for i in range(4):
             self.a.tick_heartbeat()
+            if time.time() - t0 > find_budget:
+                self.log.warning(f"[商店] 找商品总预算({find_budget}s)耗尽 "
+                                 f"— 停止搜索")
+                break
             info = self._detect_product(target_amount)
             if info and info.matched:
                 self.log.info(f"[商店] 找到目标商品: {info.name} "
                               f"({info.price}) (底部起第 {i + 1} 屏)")
                 self.a._mark_trace("PACKAGE_FOUND")
                 return info
+            if not self._shop_still_open():
+                self.kicked_out = True
+                return None
             self.d.swipe_direction("down", distance=0.4)
             time.sleep(0.6)
 
@@ -207,6 +300,10 @@ class ShopAutomation:
         self.log.info("[商店] 可能滚过头, 反向回滚查找")
         for i in range(4):
             self.a.tick_heartbeat()
+            if time.time() - t0 > find_budget:
+                self.log.warning(f"[商店] 找商品总预算({find_budget}s)耗尽 "
+                                 f"— 停止回滚")
+                break
             self.d.swipe_direction("down", distance=0.5)
             time.sleep(1.0)
             info = self._detect_product(target_amount)
@@ -215,6 +312,9 @@ class ShopAutomation:
                               f"({info.price}) (回滚 {i + 1} 次)")
                 self.a._mark_trace("PACKAGE_FOUND")
                 return info
+            if not self._shop_still_open():
+                self.kicked_out = True
+                return None
         self.log.warning(f"[商店] 滑动 {max_scroll} 次仍未找到商品 → "
                          f"PRODUCT_NOT_FOUND")
         return None
@@ -287,12 +387,18 @@ class ShopAutomation:
     # ── 点击与校验 ──
 
     def click_product(self, info: ProductInfo) -> bool:
-        """点击目标商品。成功标准: 出现 Google Play 购买页"""
+        """点击目标商品。成功标准: 出现 Google Play 购买页(§五 步级预算)"""
         x = (info.bbox[0] + info.bbox[2]) // 2
         y = (info.bbox[1] + info.bbox[3]) // 2
         self.d.click(x, y)
+        self.detector.bust_caches()   # 事件驱动: 点击后强制全新检测
         state = self.detector.wait_for_state(
-            [PokemonGoState.PURCHASE_PAGE], timeout=30)
+            [PokemonGoState.PURCHASE_PAGE],
+            timeout=self.a._step_budget("purchase_page", 20))
+        if state != PokemonGoState.PURCHASE_PAGE:
+            self.log.warning(f"[商店] 点击商品后未出现 Google Play 页"
+                             f"(当前={state.value}, 预算已耗) — 截图留档")
+            self.a.capture_keyframe("PURCHASE_PAGE_TIMEOUT")
         return state == PokemonGoState.PURCHASE_PAGE
 
     def verify_product_on_purchase_page(self, info: ProductInfo,

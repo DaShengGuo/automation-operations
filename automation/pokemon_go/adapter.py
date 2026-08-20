@@ -170,20 +170,37 @@ class PokemonGoAdapter(BaseGameAutomation):
         }
         return mapping.get(state, PageState.UNKNOWN)
 
-    def wait_home(self, timeout: float) -> bool:
-        """登录后等待进入主界面: MAP / 首次流程页面。
+    def wait_home(self, timeout: float = None) -> bool:
+        """登录后等待进入主界面: MAP / 首次流程页面(§二, 步级预算 home_wait)。
 
         循环内主动处理公告弹窗(弹窗遮挡 MAP 时不必等超时进 RECOVERY)。
+        单轮超预算: 截图保存 + 记录日志 + 重启APP(暖启动保会话)重新
+        进入, 再来一轮; 仍失败返回 False 交 Worker 恢复 — 绝不无限卡住
+        (真机: WAIT_HOME 曾干等 38s 无动作)。
         """
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            state = self.detector.detect()
-            if state in (PokemonGoState.MAP, PokemonGoState.INITIAL_PROMPT,
-                         PokemonGoState.WELCOME_PAGE,
-                         PokemonGoState.PROFESSOR_DIALOG):
-                return True
-            self.handle_popups()  # 公告/首次弹窗(内部 OCR 走缓存)
-            time.sleep(2)
+        timeout = timeout or self._step_budget("home_wait", 20)
+        rounds = max(1, int(self._step_budget("home_rounds", 2)))
+        for rnd in range(1, rounds + 1):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                state = self.detector.detect()
+                if state in (PokemonGoState.MAP,
+                             PokemonGoState.INITIAL_PROMPT,
+                             PokemonGoState.WELCOME_PAGE,
+                             PokemonGoState.PROFESSOR_DIALOG):
+                    self.log.info(f"[步骤] 检测主页成功 "
+                                  f"(state={state.value}, 第{rnd}轮)")
+                    self._mark_trace("MAP_FOUND")
+                    return True
+                self.handle_popups()  # 公告/首次弹窗(内部 OCR 走缓存)
+                time.sleep(2)
+            # 超预算(§五): 截图保存 + 记录日志 + 重启APP 重新进入
+            self.capture_keyframe("HOME_TIMEOUT")
+            self.log.warning(f"[WAIT_HOME] 等待主页面超时({timeout}s 预算) "
+                             f"— 截图留档, 重启APP 重新进入 "
+                             f"(第{rnd}/{rounds}轮)")
+            if rnd < rounds:
+                self.launch()   # 智能启动: 已在地图不重启, 未知页拉前台
         return False
 
     def handle_popups(self) -> int:
@@ -644,6 +661,18 @@ class PokemonGoAdapter(BaseGameAutomation):
         cfg = self.sel.ptc.get("entry_texts", {}) or {}
         return cfg.get(key) or []
 
+    def _step_budget(self, key: str, default: float) -> float:
+        """步级看门狗预算(秒) — 从 game yaml budgets 读取(§五)。
+
+        每步超过预算: 截图留档 + 记录日志 + 重启APP(暖启动) +
+        重新执行当前步骤。禁止任何无意义几十秒等待。
+        """
+        try:
+            return float((self.cfg.game.get("budgets") or {}).get(
+                key, default))
+        except Exception:
+            return default
+
     # ── 首次流程(存在则处理) ──
 
     def handle_initial_pages(self, max_steps: int = 8) -> bool:
@@ -679,17 +708,21 @@ class PokemonGoAdapter(BaseGameAutomation):
         try:
             # 先清弹窗: 模态弹窗(週間大挑戰等)会吞掉主菜单的精灵球点击
             self.handle_popups()
-            # MAP → 主菜单
+            # MAP → 主菜单(步级预算 menu_open)
+            self.log.info("[步骤] 打开主菜单")
             if self.detect_state() != PokemonGoState.MAIN_MENU:
-                if not self.logout_auto.open_main_menu():
+                if not self.logout_auto.open_main_menu(
+                        timeout=self._step_budget("menu_open", 15)):
                     return TaskOutcome(False, "OPEN_MAIN_MENU",
                                        "无法打开主菜单")
-            # 商店
+            # 商店(步级预算 shop_entry)
+            self.log.info("[步骤] 点击商城")
             if not self.shop_auto.enter_shop():
                 return TaskOutcome(False, "ENTER_SHOP", "无法进入商店")
+            self.log.info("[步骤] 商城加载成功")
             self.capture_keyframe("SHOP")
-            # 找商品
-            info = self.shop_auto.find_product()
+            # 找商品(商城异常退出 → 有界重进 ≤ shop_reenter 次)
+            info = self._find_product_with_guards()
             if info is None:
                 return TaskOutcome(False, "PRODUCT_NOT_FOUND",
                                    "滚动结束未找到目标商品")
@@ -717,8 +750,12 @@ class PokemonGoAdapter(BaseGameAutomation):
                 self.capture_keyframe("PURCHASE_UNCONFIRMED")
             if result == "SUCCESS":
                 self.capture_keyframe("PURCHASE_SUCCESS")
+                self.log.info("[步骤] 购买完成")
             # 关商店回地图
+            self.log.info("[步骤] 关闭商城, 返回主页面")
             self.shop_auto.close_shop()
+            state = self.detect_state()
+            self.log.info(f"[步骤] 主页面恢复: state={state.value}")
             # 任务成功(含 dry_run 只读完成/manual 人工购买完成) →
             # 解锁登出守卫: 只有走到这里才允许 LOGOUT
             self._purchase_ok = True
@@ -726,6 +763,34 @@ class PokemonGoAdapter(BaseGameAutomation):
         except Exception as e:
             self.log.error(f"[任务] 异常: {e}", exc_info=True)
             return TaskOutcome(False, "EXCEPTION", str(e))
+
+    def _find_product_with_guards(self):
+        """找商品 + 商城异常退出恢复(§四)。
+
+        滑动过程中检测到首页 UI 出现(MAP/主菜单/设置) = 异常退出商城 →
+        记录错误 + 重新进入商城, 最多重进 shop_reenter(默认 2) 次。
+        绝不静默进入下一步(真机: 未修复前误点商城 X 关闭按钮后
+        直接在主页空滑几十秒)。
+        """
+        max_reenter = max(0, int(self._step_budget("shop_reenter", 2)))
+        for attempt in range(max_reenter + 1):
+            info = self.shop_auto.find_product()
+            if info is not None:
+                return info
+            state = self.detect_state()
+            if state in (PokemonGoState.MAIN_MENU, PokemonGoState.MAP,
+                         PokemonGoState.SETTINGS,
+                         PokemonGoState.LOGOUT_CONFIRM):
+                self.log.error(f"[商城异常退出] 滑动后当前页={state.value} "
+                               f"— 记录错误并重新进入商城 "
+                               f"(第{attempt + 1}/{max_reenter}次)")
+                self.capture_keyframe("SHOP_KICKED_OUT")
+                if attempt < max_reenter and self.shop_auto.enter_shop():
+                    continue
+                return None
+            # 仍在商城但未找到目标商品(非异常退出) — 不重进
+            return None
+        return None
 
     def verify_result(self) -> Optional[bool]:
         """任务结果验证: 购买成功标记或安全跳过"""
