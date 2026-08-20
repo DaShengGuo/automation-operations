@@ -325,7 +325,8 @@ class PokemonGoPageDetector:
         等待 RETURNING_PLAYER 时页面已到 LOGIN_PROVIDER(人工点过
         已注册等场景) → 立即返回, 不再白等整段超时后判失败。
         """
-        deadline = time.time() + timeout
+        t0 = time.time()
+        deadline = t0 + timeout
         last = PokemonGoState.UNKNOWN
         fast_phase = min(3.0, timeout / 2)
         while time.time() < deadline:
@@ -341,6 +342,13 @@ class PokemonGoPageDetector:
             iv = interval if (deadline - time.time()) > \
                 (timeout - fast_phase) else max(interval, 0.8)
             time.sleep(iv)
+        # 等待超时诊断(§十六): >5s 的等待记录现场, 供事后优化
+        waited = time.time() - t0
+        if waited > 5.0:
+            logger.warning(f"[等待诊断] 等待 {[s.value for s in states]} "
+                           f"超时: 耗时={waited:.1f}s "
+                           f"当前={last.value} "
+                           f"证据={self.last_evidence}")
         return last
 
     def wait_game_foreground(self, timeout: float) -> bool:

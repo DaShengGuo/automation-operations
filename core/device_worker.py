@@ -247,8 +247,15 @@ class DeviceWorker(threading.Thread):
         self._login_done = False            # 本周期是否已登录本账号
         self._session_reset_attempts = 0    # 残留会话登出尝试(防死循环)
         self._ensure_session()
+        # 执行轮次(§十八): 同账号重复加入队列时, 历史结果行数+1=第 N 轮。
+        # 队列模式下任务完成后移出队列, 重复添加=新一轮(合法)。
+        try:
+            round_no = len(self.results.list(account_id=self.account.id)) + 1
+        except Exception:
+            round_no = 1
         self.log.info(f"领取账号 {account.masked()} "
-                      f"(重试次数={account.retry_count})")
+                      f"(重试次数={account.retry_count}, "
+                      f"execution_round={round_no})")
         self.fsm.force(WorkerState.CHECK_DEVICE)
         self.fsm.set_timeout(self.cfg.state_timeout("check_device"))
         self._set_state(WorkerState.CHECK_DEVICE)
@@ -450,9 +457,10 @@ class DeviceWorker(threading.Thread):
                         self.log.info(f"[弹窗] 处理 {handled} 个后重新检测")
                 except Exception as e:
                     self.log.debug(f"[弹窗] 处理异常: {e}")
-                time.sleep(2)  # 仍未识别 → 等超时兜底进 RECOVERY
+                time.sleep(0.5)  # 高频复检(弹窗一出现立即响应);
+                                 # 弹窗 handler 自带 10s 冷却防动作轰炸
             else:
-                time.sleep(2)  # SPLASH 等加载
+                time.sleep(0.5)  # SPLASH 等加载(高频复检, 出现即继续)
 
         elif state == WorkerState.LOGIN:
             result = self.automation.login(self.account)
@@ -493,7 +501,18 @@ class DeviceWorker(threading.Thread):
             if self.detector_wait_home():
                 self._enter_state(WorkerState.HANDLE_POPUPS)
             else:
-                time.sleep(2)  # 超时兜底
+                # 快速分流: 认证失败弹窗被点掉后回到登录页 —
+                # 直接重走 DETECT_PAGE→LOGIN, 不烧 30s 超时进 RECOVERY
+                # (真机: 無法進行認證弹窗 OK 后应在 3s 内重启登录)
+                page = self._page()
+                if page == PageState.LOGIN:
+                    self.log.info("[WAIT_HOME] 已回到登录页(认证失败/弹窗)"
+                                  " — 快速重走登录流程")
+                    self._login_done = False
+                    self.fsm.force(WorkerState.DETECT_PAGE)
+                    self._enter_state(WorkerState.DETECT_PAGE)
+                else:
+                    time.sleep(0.5)  # 超时兜底(状态超时仍由 fsm 把关)
 
         elif state == WorkerState.HANDLE_POPUPS:
             self.automation.handle_popups()
@@ -540,7 +559,15 @@ class DeviceWorker(threading.Thread):
 
         elif state == WorkerState.LOGOUT:
             if self.cfg.get("logout_required", True):
-                self.automation.logout()
+                if not self.automation.logout():
+                    # 登出守卫拒绝(任务未成功) — 流程被非法路由到此,
+                    # 保留证据并按账号失败处理, 绝不静默 CLEANUP
+                    self.log.error("[登出] 守卫拒绝退出账号 — 账号 RETRY")
+                    self._capture_evidence("WRONG_LOGOUT_ATTEMPT",
+                                           f"state={state.value} "
+                                           f"purchase 未成功")
+                    self._mark_account_retry("WRONG_LOGOUT_ATTEMPT")
+                    return
             else:
                 self.log.info("logout_required=false，跳过退出登录")
             self._enter_state(WorkerState.CLEANUP)
@@ -596,7 +623,8 @@ class DeviceWorker(threading.Thread):
         self._session_reset_attempts += 1
         self.log.warning(f"[会话] 检测到残留 HOME 会话(非本账号), "
                          f"第 {self._session_reset_attempts} 次登出")
-        self.automation.logout()
+        # force=True: 残留会话登出是账号切换的安全前提, 不受购买守卫限制
+        self.automation.logout(force=True)
         self.fsm.force(WorkerState.DETECT_PAGE)
         self._enter_state(WorkerState.DETECT_PAGE)
 

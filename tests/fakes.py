@@ -141,7 +141,7 @@ class ScriptedAutomation:
     def verify_result(self):
         return True
 
-    def logout(self):
+    def logout(self, force=False):
         self.calls.append("logout")
         self.login_done = False  # 登出后会话结束, 回到登录页(真机语义)
         return True

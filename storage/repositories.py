@@ -291,12 +291,16 @@ class TaskResultRepository:
              result.retry_count, result.screenshot))
         return cur.lastrowid
 
-    def list(self, limit: int = 500, device_serial: str = ""
-             ) -> list[dict]:
+    def list(self, limit: int = 500, device_serial: str = "",
+             account_id: int = 0) -> list[dict]:
         if device_serial:
             rows = self.db.query(
                 "SELECT * FROM task_results WHERE device_serial = ? "
                 "ORDER BY id DESC LIMIT ?", (device_serial, limit))
+        elif account_id:
+            rows = self.db.query(
+                "SELECT * FROM task_results WHERE account_id = ? "
+                "ORDER BY id DESC LIMIT ?", (account_id, limit))
         else:
             rows = self.db.query(
                 "SELECT * FROM task_results ORDER BY id DESC LIMIT ?",

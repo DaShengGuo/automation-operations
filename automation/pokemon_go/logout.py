@@ -161,4 +161,7 @@ class LogoutAutomation:
         self.a.capture_keyframe("LOGOUT_CONFIRM")
         if not self.confirm_logout():
             return False
-        return self.verify_logged_out(timeout=timeout)
+        ok = self.verify_logged_out(timeout=timeout)
+        if ok:
+            self.a._mark_trace("LOGOUT_SUCCESS")
+        return ok

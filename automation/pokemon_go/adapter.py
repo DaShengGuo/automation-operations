@@ -88,6 +88,9 @@ class PokemonGoAdapter(BaseGameAutomation):
         self.last_action_ts = time.time()
         self._last_click_ts = 0.0
         self.tracer_cb = None              # Worker 注入(PerformanceTracer.mark)
+        # 登出守卫: 仅 PURCHASE_SUCCESS(或任务成功)后才能登出。
+        # 防「点中心球误入设置 → 误点登出」导致账号流程被截断。
+        self._purchase_ok = False
 
     # ── 通用接口映射 ──
 
@@ -358,6 +361,7 @@ class PokemonGoAdapter(BaseGameAutomation):
         self._active_account = account.masked()
         self.last_action = "login_start"
         self.last_action_ts = time.time()
+        self._purchase_ok = False   # 新账号周期: 未购买前禁止登出
         # 已在地图 = 已登录
         if self.detect_state() == PokemonGoState.MAP:
             return LoginResult.ALREADY_LOGGED_IN
@@ -715,6 +719,9 @@ class PokemonGoAdapter(BaseGameAutomation):
                 self.capture_keyframe("PURCHASE_SUCCESS")
             # 关商店回地图
             self.shop_auto.close_shop()
+            # 任务成功(含 dry_run 只读完成/manual 人工购买完成) →
+            # 解锁登出守卫: 只有走到这里才允许 LOGOUT
+            self._purchase_ok = True
             return TaskOutcome(True)
         except Exception as e:
             self.log.error(f"[任务] 异常: {e}", exc_info=True)
@@ -736,8 +743,18 @@ class PokemonGoAdapter(BaseGameAutomation):
 
     # ── 退出登录 ──
 
-    def logout(self) -> bool:
-        """设置 → 登出 → YES → 验证 RETURNING_PLAYER"""
+    def logout(self, force: bool = False) -> bool:
+        """设置 → 登出 → YES → 验证 RETURNING_PLAYER
+
+        登出守卫: 非强制登出必须已满足「任务成功」(_purchase_ok)。
+        防「点中心球误入设置 → 误点登出」截断账号流程 —
+        残留会话登出(_reset_residual_session)走 force=True。
+        """
+        if not force and not self._purchase_ok:
+            self.log.error("[登出守卫] WRONG_LOGOUT_ATTEMPT: 任务未成功"
+                           "(purchase_ok=False), 拒绝退出账号")
+            self.capture_keyframe("WRONG_LOGOUT_ATTEMPT")
+            return False
         return self.logout_auto.run()
 
     # ── 完整单账号流程 ──

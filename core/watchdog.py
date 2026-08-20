@@ -61,15 +61,19 @@ class Watchdog:
     def __init__(self, serial: str, controller, adb: AdbManager,
                  package: str,
                  page_stuck_threshold: int = 5,
-                 page_unknown_threshold: int = 5):
+                 page_unknown_threshold: int = 5,
+                 page_stuck_sec: float = 30.0):
         self.serial = serial
         self.d = controller
         self.adb = adb
         self.package = package
         self.page_stuck_threshold = page_stuck_threshold
         self.page_unknown_threshold = page_unknown_threshold
+        # 停滞判定按秒(§八): tick 频率提升后不能按"连续 N 次同屏"判卡死 —
+        # 慢加载页面(游戏加载 20-30s 静态画面)绝不能误报 PAGE_STUCK。
+        self.page_stuck_sec = page_stuck_sec
         self._last_screen_hash: Optional[str] = None
-        self._same_screen_count = 0
+        self._screen_since: float = 0.0
         self._unknown_page_count = 0
         self.max_level_attempts = 5  # 每个恢复等级最多尝试次数
 
@@ -109,21 +113,21 @@ class Watchdog:
         if current_page == PageState.ERROR:
             return AnomalyType.PAGE_UNKNOWN
 
-        # 5. 页面长时间无变化（截图哈希）
+        # 5. 页面长时间无变化（截图哈希 + 持续时间, 按秒判定）
         try:
             shot = self.d.screenshot()
             h = str(hash(shot.tobytes()))
         except Exception:
             return AnomalyType.U2_DISCONNECTED
+        now = time.time()
         if h == self._last_screen_hash:
-            self._same_screen_count += 1
-            if (self._same_screen_count >= self.page_stuck_threshold
+            if (now - self._screen_since >= self.page_stuck_sec
                     and current_page not in (PageState.TASK_RUNNING,)):
                 self._reset_screen_tracking()
                 return AnomalyType.PAGE_STUCK
         else:
-            self._same_screen_count = 0
-        self._last_screen_hash = h
+            self._last_screen_hash = h
+            self._screen_since = now
 
         # 6. 页面未知计数
         if current_page == PageState.UNKNOWN:
@@ -138,7 +142,7 @@ class Watchdog:
 
     def _reset_screen_tracking(self):
         self._last_screen_hash = None
-        self._same_screen_count = 0
+        self._screen_since = 0.0
 
     # ── 恢复 ──
 

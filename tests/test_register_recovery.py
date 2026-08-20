@@ -136,10 +136,13 @@ def test_scenario1_normal_click_passes(env):
         ctrl.ocr_texts = list(PROVIDER_TEXTS)
     ctrl.click_effect = effect
 
+    t0 = time.time()
     ok = adapter.click_returning_player(timeout=10)
+    elapsed = time.time() - t0
     assert ok
     assert len(ctrl.clicks) == 1, "正常流程只应点击一次"
     assert ctrl.app_stops == 0, "正常流程绝不重启"
+    assert elapsed < 5.0, f"页面出现必须立即处理(实际 {elapsed:.1f}s)"
     assert adapter.detect_state() == PokemonGoState.LOGIN_PROVIDER
 
 

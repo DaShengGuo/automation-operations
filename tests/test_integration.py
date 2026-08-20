@@ -218,7 +218,7 @@ class TestWorkerPipeline:
                     return PageState.HOME  # 残留会话: 未登录就已在 HOME
                 return PageState.HOME if self.login_done else PageState.LOGIN
 
-            def logout(self):
+            def logout(self, force=False):
                 self.calls.append("logout")
                 self.residual = False       # 登出后残留会话消失
                 return True
