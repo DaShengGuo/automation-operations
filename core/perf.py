@@ -164,7 +164,16 @@ def wait_fast(condition: Callable[[], bool],
 # ── ScreenFingerprint ────────────────────────────────────────
 
 def screen_fingerprint(image_bgr, shrink: int = 8) -> str:
-    """缩小→灰度→感知哈希: 判断画面是否变化(不用于设备身份)。"""
+    """缩小→灰度感知哈希 + 4×4 色块均值网格: 判断画面是否变化。
+
+    真机教训(2026-08): 纯灰度 8×4 感知哈希在不同暗色全屏页面
+    (主菜单/商店/设置/退出确认弹窗)上大量碰撞 — 实测 5 组标签
+    共用同一指纹, 检测器状态缓存把「主菜单」复用为「商店」,
+    导致商城流程在菜单页空滑/误点关闭按钮(卡顿+误退商城根因)。
+    加入 4×4 色块均值(16 级量化)后不同页面必然区分。
+    契约: 同一画面 → 同一指纹(缓存有效); 画面内容变化 → 指纹变化
+    (代价仅一次全量重检, 正确性优先)。
+    """
     import cv2
     import numpy as np
     try:
@@ -174,7 +183,12 @@ def screen_fingerprint(image_bgr, shrink: int = 8) -> str:
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         avg = gray.mean()
         bits = (gray > avg).flatten()
-        return hashlib.md5(bits.tobytes()).hexdigest()[:16]
+        # 色块均值网格: 两步缩小避免一步极端降采样
+        mid = cv2.resize(image_bgr, (54, 120), interpolation=cv2.INTER_AREA)
+        grid = cv2.resize(mid, (4, 4), interpolation=cv2.INTER_AREA)
+        quant = (grid.astype(np.int16) // 16).flatten()
+        payload = bits.tobytes() + quant.tobytes()
+        return hashlib.md5(payload).hexdigest()[:16]
     except Exception:
         return ""
 

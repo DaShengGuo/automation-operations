@@ -32,6 +32,18 @@ timeouts:
   purchase_manual: 300     # manual 模式人工确认等待
   logout_verify: 60        # 退出后验证 RETURNING_PLAYER
 
+# 步级看门狗预算(秒) — 每步超过预算: 截图留档 + 记录日志 +
+# 重启APP(暖启动保会话) + 重新执行当前步骤。禁止无意义几十秒等待。
+budgets:
+  home_wait: 20            # 登录后等主页面(MAP); 超时截图+重启+重入一轮
+  home_rounds: 2           # wait_home 最大轮次(两轮仍不进主页交 RECOVERY)
+  menu_open: 15            # 打开主菜单
+  shop_entry: 15           # 点击商城 → 商城页出现
+  shop_scroll: 15          # 商城快速滑底阶段(判底靠连续两次截图无变化)
+  shop_find: 40            # 商城找商品总预算(滑底+4屏搜索+回滚)
+  shop_reenter: 2          # 商城异常退出(首页UI出现)重进上限
+  purchase_page: 20        # 点击商品 → Google Play 购买页出现
+
 # 注册选择页(RETURNING_PLAYER/REGISTER_SELECT)恢复参数 — §10/§15
 # 分级恢复(不含重启): L1 重检等待 / L2 重dump / L3 重点击(≤2次,3s防连点)
 # / L4 暖切回前台。全部失败由 Worker 页级恢复预算(3 轮)决定 restart 或账号 RETRY。
@@ -109,11 +121,18 @@ states:
       - [Shop, Settings]
     min_hits: 1
   SHOP:
-    # 商店页特征(避开与主菜单/设置页冲突的词)
+    # 商店页特征(避开与主菜单/设置页冲突的词)。
+    # 真机教训: 旧 [寶可幣,IDR] 组要求 IDR 同现 — 美区商店价格是
+    # US$0.99(真机 PRODUCT_FOUND 截图实测), 商城页永远检测失败,
+    # 进店等待白烧 30s+10s。寶可幣 独立成组(主菜单/设置页无此词,
+    # 设置页只有「購買金幣」不冲突); US$ 价格行同作独立证据。
     ocr_rules:
-      - [寶可幣, IDR]
+      - [寶可幣]
+      - [宝可币]
       - [PokéCoins]
+      - [PokeCoins]
       - [Pokecoins]
+      - [US$]                 # 真机美区价格行(US$0.99/US$4.99...)
       - [新手禮盒]
       - [加成禮盒]
       - [看看别的貼圖]       # 繁体(真机 OCR 实拍: 看看别的貼圖)
@@ -167,8 +186,15 @@ states:
   MAP:
     # 主地图: 底部中央 Poké Ball(真机截图裁剪模板, 匹配位置实测 545,2205)
     # 玩家昵称每账号变化, 不能作为固定特征; 地图元素几乎无文字(Unity)
-    ocr_rules: []
+    # 三条独立证据(任一命中即可, MAP 在检测链最后 — 兜底):
+    #   1) 模板 pgo_pokeball(真机 0.93-0.98)
+    #   2) 红色像素占比(精灵球色块, 真机 0.048 vs 其它页 ≤0.013)
+    #   3) OCR [目前位置](真机地图顶部: 無法偵側目前位置(12))
+    ocr_rules:
+      - [目前位置]
     templates: [pgo_pokeball]
+    red_ratio_threshold: 0.025
+    red_ratio_roi: [0.35, 0.82, 0.65, 0.97]
     min_hits: 1
 
 # ── PTC 网页(浏览器无关, 只认网页内容) ─────────────────────

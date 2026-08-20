@@ -165,6 +165,10 @@ class PokemonGoPageDetector:
                         hits += 1
                         evidence.append(f"tpl:{t}")
                         break
+            if rule.red_ratio_threshold is not None and shot is not None:
+                if self._red_ratio_hit(shot, rule):
+                    hits += 1
+                    evidence.append("red_ratio")
             if rule.ocr_rules:
                 texts = self._ocr_texts(shot)
                 o = rule.match_ocr(texts)
@@ -224,6 +228,26 @@ class PokemonGoPageDetector:
             return PokemonGoState.PTC_LOGIN_ERROR
         # 白屏/加载中 → 交给 wait_ptc_login_page 超时判定
         return PokemonGoState.PTC_REDIRECTING
+
+    @staticmethod
+    def _red_ratio_hit(shot, rule) -> bool:
+        """色块证据: ROI 内红色像素占比超过阈值(截图统一 BGR 通道)。
+
+        MAP 底部精灵球兜底 — 真机实测红色占比: 地图 0.048,
+        商店/主菜单/设置 ≤0.013, 阈值 0.025 两侧均有 2 倍余量。
+        """
+        try:
+            import cv2
+            import numpy as np
+            h, w = shot.shape[:2]
+            x1, y1, x2, y2 = rule.red_ratio_roi
+            roi = shot[int(y1 * h):int(y2 * h), int(x1 * w):int(x2 * w)]
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            red = ((hsv[:, :, 0] < 10) | (hsv[:, :, 0] > 170)) & \
+                  (hsv[:, :, 1] > 90) & (hsv[:, :, 2] > 80)
+            return float(red.mean()) > rule.red_ratio_threshold
+        except Exception:
+            return False
 
     @staticmethod
     def _xml_has_any(xml: str, keywords: Sequence[str]) -> bool:

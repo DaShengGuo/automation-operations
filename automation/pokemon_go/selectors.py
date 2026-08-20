@@ -26,6 +26,11 @@ class StateRule:
     # 模板图片名(不含 .png)
     templates: list[str] = field(default_factory=list)
     template_threshold: Optional[float] = None
+    # 色块证据: 指定 ROI 内红色像素占比超过阈值即命中一条证据
+    # (MAP 底部精灵球 — 模板失效/设备渲染差异时的兜底, 真机实测
+    #  地图 0.048 vs 商店/菜单 ≤0.013)
+    red_ratio_threshold: Optional[float] = None
+    red_ratio_roi: tuple = (0.35, 0.82, 0.65, 0.97)
     # 需要命中多少条独立证据(默认 1)
     min_hits: int = 1
 
@@ -67,6 +72,9 @@ class PokemonGoSelectors:
                 hierarchy_descs=list(cfg.get("hierarchy_descs") or []),
                 templates=list(cfg.get("templates") or []),
                 template_threshold=cfg.get("template_threshold"),
+                red_ratio_threshold=cfg.get("red_ratio_threshold"),
+                red_ratio_roi=tuple(cfg.get("red_ratio_roi")
+                                    or (0.35, 0.82, 0.65, 0.97)),
                 min_hits=int(cfg.get("min_hits", 1)),
             )
         # 从通用 page 配置迁移的兼容读取
