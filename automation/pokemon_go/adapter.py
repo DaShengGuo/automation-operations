@@ -826,19 +826,18 @@ class PokemonGoAdapter(BaseGameAutomation):
             # 先清弹窗: 模态弹窗(週間大挑戰等)会吞掉主菜单的精灵球点击
             self.handle_popups()
             # MAP → 主菜单(步级预算 menu_open)
-            self._checkpoint("打开主菜单")
+            self.log.info("[MAP] 点击菜单(精灵球)")
             if self.detect_state() != PokemonGoState.MAIN_MENU:
                 if not self.logout_auto.open_main_menu(
                         timeout=self._step_budget("menu_open", 15)):
                     return TaskOutcome(False, "OPEN_MAIN_MENU",
                                        "无法打开主菜单")
             # 商店(步级预算 shop_entry)
-            self._checkpoint("点击商城")
+            self.log.info("[MENU] 点击商城")
             if not self.shop_auto.enter_shop():
                 return TaskOutcome(False, "ENTER_SHOP", "无法进入商店")
-            self._checkpoint("商城加载成功, 开始滑动到底部")
+            self.log.info("[SHOP] 商城确认成功, 立即开始大幅滑动")
             self.capture_keyframe("SHOP")
-            # 找商品(商城异常退出 → 有界重进 ≤ shop_reenter 次)
             info = self._find_product_with_guards()
             if info is None:
                 return TaskOutcome(False, "PRODUCT_NOT_FOUND",
@@ -883,32 +882,17 @@ class PokemonGoAdapter(BaseGameAutomation):
             return TaskOutcome(False, "EXCEPTION", str(e))
 
     def _find_product_with_guards(self):
-        """找商品 + 商城异常退出恢复(§四)。
+        """找商品(规格 2026-08-21 §七: 删除自动重新进入商城)。
 
-        滑动过程中检测到首页 UI 出现(MAP/主菜单/设置) = 异常退出商城 →
-        记录错误 + 重新进入商城, 最多重进 shop_reenter(默认 2) 次。
-        绝不静默进入下一步(真机: 未修复前误点商城 X 关闭按钮后
-        直接在主页空滑几十秒)。
+        旧实现: 滑动后 detect 到 MAP/主菜单 → 自动重进商城 ≤2 次 —
+        真机证实该判断不可靠(商城页红色商品图标误判 MAP), 导致
+        商城没退出却反复重进。现改为:
+          - 退出判定由 shop._shop_still_open 四条件强证据把关
+            (商城特征消失 + 连续两次确认), 滑动中命中才真退出;
+          - find_product 返回 None(真退出/未找到) → 直接返回,
+            不再自动重进商城(交给上层正常流程处理)。
         """
-        max_reenter = max(0, int(self._step_budget("shop_reenter", 2)))
-        for attempt in range(max_reenter + 1):
-            info = self.shop_auto.find_product()
-            if info is not None:
-                return info
-            state = self.detect_state()
-            if state in (PokemonGoState.MAIN_MENU, PokemonGoState.MAP,
-                         PokemonGoState.SETTINGS,
-                         PokemonGoState.LOGOUT_CONFIRM):
-                self.log.error(f"[商城异常退出] 滑动后当前页={state.value} "
-                               f"— 记录错误并重新进入商城 "
-                               f"(第{attempt + 1}/{max_reenter}次)")
-                self.capture_keyframe("SHOP_KICKED_OUT")
-                if attempt < max_reenter and self.shop_auto.enter_shop():
-                    continue
-                return None
-            # 仍在商城但未找到目标商品(非异常退出) — 不重进
-            return None
-        return None
+        return self.shop_auto.find_product()
 
     def verify_result(self) -> Optional[bool]:
         """任务结果验证: 购买成功标记或安全跳过"""

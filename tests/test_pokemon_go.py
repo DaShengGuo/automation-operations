@@ -1063,21 +1063,19 @@ class TestShopFastScrollToBottom:
         assert downs == []
 
     def test_pin_detection_then_search_at_bottom(self):
-        """列表钉底(内容稳定, 仅计时器跳动) → 判底提前停 → 识别命中。
-        规格§五: 判底是到底提前停优化(非回滚), 钉底说明已在底部,
-        商品在最底 → 判底停止后立即识别到。"""
+        """列表钉底(内容稳定)也滑满固定 6 次(规格§九: 无判底提前停),
+        6 次后才统一识别, 商品在最底 → 识别命中。"""
         a = self._make()
         swipes = []
         a.d.swipe = lambda x1, y1, x2, y2, duration=0.3: \
             swipes.append((x1, y1, x2, y2))
         a.d.swipe_direction = lambda direction, distance=0.5: \
             swipes.append((direction, distance))
-        # 截图恒定 → 容差判底触发, 滑动提前结束
+        # 截图恒定(钉底) — 无判底提前停, 同样完整滑 6 次
         a.d.screenshot = lambda: np.zeros(
             (a.d.screen_h, a.d.screen_w, 3), dtype=np.uint8)
         ocr_calls = []
-        # 商品在第一次统一识别即出现(appear_at=1)。钉底判底提前停后,
-        # 商品在最底 → 统一识别命中。
+        # 商品在第一次统一识别即出现(appear_at=1)
         self._product_ocr(a, ocr_calls, appear_at=1)
         info = a.shop_auto.find_product(max_scroll=8)
 
@@ -1088,6 +1086,7 @@ class TestShopFastScrollToBottom:
         downs = [s for s in swipes if isinstance(s, tuple) and len(s) == 4
                  and s[1] < s[3]]
         assert ups, "必须有上滑"
-        assert len(ups) <= 3, f"判底后不再多滑(实际 {len(ups)} 次上滑)"
-        # 判底停止后统一识别(商品在最底, 第 1 次统一识别即命中返回)
+        assert len(ups) == 6, \
+            f"规格§九无判底提前停: 完整滑 6 次后识别(实际 {len(ups)} 次上滑)"
+        # 6 次滑完后统一识别(第 1 次识别即命中返回, 不补滑)
         assert len(ocr_calls) >= 1

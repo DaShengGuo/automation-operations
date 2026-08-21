@@ -239,11 +239,11 @@ def test_shop_not_misdetected_as_main_menu(env, monkeypatch):
 # ── 4e: 滑动无变化时重试一次再判底(规格核心 — 防滑动未生效卡死) ──────
 
 def test_scroll_fixed_count_no_rollback(env, monkeypatch):
-    """定数滑动 6+3 次, 到底提前停, 绝不回滚(无 down swipe)。
+    """定数滑动固定 6+3=9 次, 绝不回滚(无 down swipe), 无判底提前停。
 
-    规格(2026-08-21 §四~§八): 删除"滚过头回滚/反向查找"。
-    两阶段: 第一阶段 6 次 → 识别 → 未中补 3 次 → 再识别。
-    判底(连续 2 帧静帧无变化)是到底提前停, 不是回滚。
+    规格(2026-08-21 §四~§九): 滑动结束只由「完成规定次数」决定 —
+    无超预算停止、无判底提前停、无回滚/反向查找。
+    两阶段: 第一阶段完整 6 次 → 识别 → 未中补 3 次 → 再识别。
     """
     ctrl, adapter = env
     ctrl.scene = "SHOP"
@@ -262,65 +262,81 @@ def test_scroll_fixed_count_no_rollback(env, monkeypatch):
     # 核心断言: 绝不回滚 — 不应有任何 down swipe 用于回滚查找
     assert swipe_calls["down"] == 0, \
         f"规格§四禁止回滚/反向滑动(实际 down swipe {swipe_calls['down']} 次)"
-    # 定数滑动: 第一阶段最多 6 次(到底提前停可能更少) + 第二阶段最多 3 次
-    assert swipe_calls["n"] <= 9, \
-        f"定数滑动 6+3 上限(实际 {swipe_calls['n']} 次)"
+    # 固定定数滑动: 第一阶段完整 6 次 + 第二阶段完整 3 次 = 9 次
+    # (无判底提前停 — 规格§九: 不每次滑动判断到底)
+    assert swipe_calls["n"] == 9, \
+        f"固定 6+3=9 次滑动(实际 {swipe_calls['n']} 次)"
     assert adapter.shop_auto.scrolling is False, "退出后释放锁"
 
 
-def test_scroll_bottom_stops_early_no_infinite(env, monkeypatch):
-    """页面钉底(滑动后静帧不变) → 连续 2 帧无变化提前判底, 不滑满 9 次。"""
+def test_scroll_completes_full_six_before_detect(env, monkeypatch):
+    """页面钉底也滑满固定次数(规格§五/§九: 无判底提前停, 完整 6 次后识别)。
+
+    钉底场景(截图不变)同样完整滑动 — 滑动结束只由完成次数决定。
+    """
     ctrl, adapter = env
     ctrl.scene = "SHOP"
     swipe_calls = {"n": 0}
+    detects = {"n": 0}
+    orig_detect = adapter.shop_auto._detect_product
 
     def static_swipe(x1, y1, x2, y2, duration=0.3):
         swipe_calls["n"] += 1
-        # 不累加 up_swipes — 截图种子恒定 (min(0,3),SHOP) 页面钉底
+        # 不累加 up_swipes — 页面钉底
     monkeypatch.setattr(ctrl, "swipe", static_swipe)
+
+    def counted_detect(*a, **k):
+        detects["n"] += 1
+        return orig_detect(*a, **k)
+    monkeypatch.setattr(adapter.shop_auto, "_detect_product", counted_detect)
 
     info = adapter.shop_auto.find_product(max_scroll=12)
     assert info is None
-    # 钉底: 第一阶段 i=1 即 stale=1, i=2 stale=2 判底 break(3 次 swipe)
-    # + 第二阶段 2 次判底 break = 5 次。远小于 9, 不无限滑。
-    assert swipe_calls["n"] <= 6, \
-        f"页面钉底必须快速判底不无限滑(实际 {swipe_calls['n']} 次)"
+    # 无判底提前停: 固定 9 次完整滑动
+    assert swipe_calls["n"] == 9, \
+        f"钉底也完整滑 6+3=9 次(实际 {swipe_calls['n']} 次)"
+    # 商品识别只发生两次: 6 次滑完后 + 3 次补滑后(滑动中禁止识别)
+    assert detects["n"] == 2, \
+        f"滑动中禁止识别, 只识别 2 次(实际 {detects['n']} 次)"
 
 
-# ── 5: 异常退出 → 重进商城(≤2) → 找到商品 ───────────────────────
+# ── 5: 商城异常退出不自动重进(规格 2026-08-21 §七: 删除自动重进) ──
 
-def test_find_product_with_guards_reenters_bounded(env, monkeypatch):
+def test_find_product_guards_no_auto_reenter(env, monkeypatch):
+    """_find_product_with_guards = 单次 find_product, 绝不自动重进商城。
+
+    规格§七: 删除「检测到 MAP → 自动重新进入商城」— 真机证实 MAP
+    判断不可靠(商城红色商品图标误判), 导致商城没退出却反复重进。
+    现契约: 退出判定由四条件强证据把关, find_product 返回 None
+    直接交上层, 不重进。
+    """
     ctrl, adapter = env
     ctrl.scene = "SHOP"
-
-    # 第一次 find_product: 上滑 2 次后滑出商城(回主菜单)
-    ctrl.kick_after_up_swipes = 2
-    # 重进时点击商店 → 场景切回商城
-    ctrl.click_effect = lambda x, y: setattr(ctrl, "scene", "SHOP")
-    # 第二次 find_product: 正常留在商城且能 OCR 到商品
-    def kick_off(*a):
-        ctrl.kick_after_up_swipes = None
-    orig_find = adapter.shop_auto.find_product
-
-    def find_with_kick_off(*a, **k):
-        result = orig_find(*a, **k)
-        kick_off()
-        return result
-    monkeypatch.setattr(adapter.shop_auto, "find_product", find_with_kick_off)
-
-    def ocr_shop(img, min_conf=0.5):
-        if ctrl.scene == "SHOP":
-            return [(t, (10, 10, 400, 60)) for t in SHOP_TEXTS] + \
-                   [("100", (100, 600, 300, 660)),
-                    ("US$0.99", (100, 670, 300, 730))]
-        return [(t, (10, 10, 400, 60)) for t in _scene_texts(ctrl)]
-    monkeypatch.setattr("core.ocr.ocr_with_boxes", ocr_shop)
+    enter_calls = {"n": 0}
+    monkeypatch.setattr(adapter.shop_auto, "enter_shop",
+                        lambda *a, **k: enter_calls.__setitem__(
+                            "n", enter_calls["n"] + 1) or True)
+    monkeypatch.setattr(adapter.shop_auto, "find_product",
+                        lambda *a, **k: None)   # 未找到(无论原因)
 
     info = adapter._find_product_with_guards()
-    assert info is not None, "重进商城后必须找到商品"
-    assert info.matched is True
-    assert any("SHOP_KICKED_OUT" in p for p in ctrl._saved), \
-        "异常退出必须留证截图"
+    assert info is None
+    assert enter_calls["n"] == 0, \
+        "find_product 返回 None 后绝不自动重进商城(规格§七)"
+
+
+def test_find_product_guards_passes_through_result(env, monkeypatch):
+    """_find_product_with_guards 透传商品结果(找到即返回)。"""
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    from automation.pokemon_go.shop import ProductInfo
+    fake_info = ProductInfo(name="100寶可", price="US$0.99",
+                            bbox=(0, 0, 10, 10), matched=True)
+    monkeypatch.setattr(adapter.shop_auto, "find_product",
+                        lambda *a, **k: fake_info)
+
+    info = adapter._find_product_with_guards()
+    assert info is fake_info
 
 
 # ── 6: wait_home 单轮超时 → 截图 + launch + 第二轮成功 ───────────
@@ -385,8 +401,12 @@ def _ball_map_shot() -> np.ndarray:
 def test_map_detected_by_red_ball_color_evidence(env, monkeypatch):
     ctrl, adapter = env
     ctrl.matcher = None                      # 模板通道失效
+    # min_hits=2 契约(2026-08-21 修复): red_ratio 单证据不判 MAP —
+    # 商城页红色商品图标曾单证据误命中 MAP, 导致滑动中被误判退出商城。
+    # 红像素 + OCR [目前位置] 两证据才算 MAP(真机地图三证据同时命中)。
     monkeypatch.setattr("core.ocr.ocr_with_boxes",
-                        lambda img, min_conf=0.5: [])
+                        lambda img, min_conf=0.5:
+                        [("目前位置", (10, 10, 300, 60))])
 
     def shot():
         return _ball_map_shot()
@@ -394,6 +414,14 @@ def test_map_detected_by_red_ball_color_evidence(env, monkeypatch):
 
     assert adapter.detect_state() == PokemonGoState.MAP
     assert "red_ratio" in adapter.detector.last_evidence
+    assert "ocr" in adapter.detector.last_evidence
+
+    # 仅红像素单证据(OCR 无 [目前位置]) → 不判 MAP(min_hits=2 核心契约)
+    monkeypatch.setattr("core.ocr.ocr_with_boxes",
+                        lambda img, min_conf=0.5: [])
+    adapter.detector.bust_caches()
+    assert adapter.detect_state() == PokemonGoState.UNKNOWN, \
+        "red_ratio 单证据不得判 MAP(商城页红色商品图标误判根因)"
 
     # 同背景无红色 → 不判 MAP
     def dark_shot():
