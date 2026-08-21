@@ -276,13 +276,13 @@ class ShopAutomation:
                     self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
                     return None
             self.log.info(f"[SHOP] 开始大幅滑动 {i + 1}/{count}")
-            self._do_swipe(swipe_x, y1, y2, duration=0.8)
-            time.sleep(0.4)   # 触摸间隔, 不判底(规格§九)
+            self._do_swipe(swipe_x, y1, y2, duration=1.0)
+            time.sleep(0.5)   # 触摸间隔(duration 1.0s 后让滚动停下), 不判底
         return None
 
-    def _do_swipe(self, x: int, y1: int, y2: int, duration: float = 0.8):
-        """执行一次精确坐标上滑(规格§七: duration 600-800ms)。
-        异常吞掉(滑动失败由后续静帧比对兜底)。"""
+    def _do_swipe(self, x: int, y1: int, y2: int, duration: float = 1.0):
+        """执行一次精确坐标上滑(规格 2026-08-21 §五: duration 800-1200ms)。
+        异常吞掉(滑动失败由调用方结果兜底)。"""
         try:
             self.d.swipe(x, y1, x, y2, duration=duration)
         except Exception as e:
@@ -314,12 +314,14 @@ class ShopAutomation:
         first_pass = int(self.shop_cfg.get("scroll_first_pass", 6))
         second_pass = int(self.shop_cfg.get("scroll_second_pass", 3))
         self.log.info(f"[SHOP] 开始大幅滑动 {first_pass} 次")
-        # 滑动参数(规格§九): start_y=1800, end_y=300-500(400), duration=0.8s。
+        # 滑动参数(规格 2026-08-21 §五): 进一步增大距离 — start_y=2200,
+        # end_y=200, duration 0.8~1.2s(取 1.0)。每次滑动覆盖更长距离,
+        # 6 次覆盖列表全程。
         sw = max(1, getattr(self.d, "screen_w", 1080))
         sh = max(1, getattr(self.d, "screen_h", 2400))
         swipe_x = sw // 2
-        swipe_y1 = int(sh * 0.75)   # 1800(基准)
-        swipe_y2 = int(sh * 0.167)  # 400(基准, 规格 300-500 区间)
+        swipe_y1 = int(sh * 0.917)  # 2200(基准 2400)
+        swipe_y2 = int(sh * 0.083)  # 200(基准 2400)
         try:
             # ── 第一阶段: 完整大幅滑动 first_pass 次(期间禁止识别) ──
             self._scroll_pass(first_pass, swipe_x, swipe_y1, swipe_y2,
@@ -422,19 +424,33 @@ class ShopAutomation:
     # ── 点击与校验 ──
 
     def click_product(self, info: ProductInfo) -> bool:
-        """点击目标商品。成功标准: 出现 Google Play 购买页(§五 步级预算)"""
+        """点击目标商品(规格 2026-08-21 §六: 重试 ≤2, 二次失败才报错)。
+
+        成功标准: 出现 Google Play 购买页。点击后等待最多 5s 检测
+        页面变化(Google Play 标题/支付页元素/购买确认按钮); 第一次
+        未出现 → 自动再次点击一次(坐标偏移/点击未生效/页面切换慢);
+        第二次仍失败才记录错误留档。绝不在第一次失败直接判死。
+        """
         x = (info.bbox[0] + info.bbox[2]) // 2
         y = (info.bbox[1] + info.bbox[3]) // 2
-        self.d.click(x, y)
-        self.detector.bust_caches()   # 事件驱动: 点击后强制全新检测
-        state = self.detector.wait_for_state(
-            [PokemonGoState.PURCHASE_PAGE],
-            timeout=self.a._step_budget("purchase_page", 20))
-        if state != PokemonGoState.PURCHASE_PAGE:
-            self.log.warning(f"[商店] 点击商品后未出现 Google Play 页"
-                             f"(当前={state.value}, 预算已耗) — 截图留档")
-            self.a.capture_keyframe("PURCHASE_PAGE_TIMEOUT")
-        return state == PokemonGoState.PURCHASE_PAGE
+        self.log.info("[BUY] 点击商品")
+        for attempt in range(2):
+            self.a.tick_heartbeat()
+            self.d.click(x, y)
+            self.detector.bust_caches()   # 事件驱动: 点击后强制全新检测
+            self.log.info(f"[BUY] 等待 Google Play 页(第 {attempt + 1}/2 次)")
+            state = self.detector.wait_for_state(
+                [PokemonGoState.PURCHASE_PAGE], timeout=5)
+            if state == PokemonGoState.PURCHASE_PAGE:
+                self.log.info("[BUY] 成功进入支付页(Google Play)")
+                return True
+            if attempt == 0:
+                self.log.info(f"[SHOP] Google Play 页未出现(当前="
+                              f"{state.value}) — 自动再次点击一次")
+        self.log.warning("[商店] 两次点击后仍未出现 Google Play 页"
+                         " — 截图留档")
+        self.a.capture_keyframe("PURCHASE_PAGE_TIMEOUT")
+        return False
 
     def verify_product_on_purchase_page(self, info: ProductInfo,
                                         retries: int = 4,

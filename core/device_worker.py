@@ -546,8 +546,9 @@ class DeviceWorker(threading.Thread):
             elif page == PageState.LOGIN:
                 self._enter_state(WorkerState.LOGIN)
             elif page.is_popup:
-                # 仍有弹窗 → 本状态内重试(超时兜底进 RECOVERY)
-                time.sleep(2)
+                # 仍有弹窗 → 本状态内快速重试(规格 2026-08-21:
+                # 弹窗只做快速检查, 0.5s 复检不阻塞流程)
+                time.sleep(0.5)
             else:
                 self._enter_state(WorkerState.DETECT_PAGE)
 

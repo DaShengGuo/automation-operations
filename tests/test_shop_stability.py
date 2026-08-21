@@ -583,3 +583,43 @@ def test_open_main_menu_gives_up_after_two_failures(env, monkeypatch):
     assert adapter.logout_auto.open_main_menu(timeout=4) is False
     assert ball_calls["n"] == 2, "最多点球 2 次, 不得无限重试"
 
+
+
+# ── 11: 商品点击重试 ≤2(规格 2026-08-21 §六) ───────────────────
+
+def test_click_product_retries_once_then_succeeds(env, monkeypatch):
+    """第一次点击后 Google Play 页未出现 → 自动再次点击 → 成功。
+    规格§六: 点击商品后等最多 5s 检测支付页, 第一次未出现自动再点
+    一次, 最多 2 次, 二次失败才记录错误。"""
+    ctrl, adapter = env
+    from automation.pokemon_go.shop import ProductInfo
+    info = ProductInfo(name="100寶可", price="US$0.99",
+                       bbox=(100, 600, 300, 660), matched=True)
+    clicks = []
+    ctrl.click = lambda x, y: clicks.append((x, y))
+    results = iter([PokemonGoState.SHOP,          # 第一次点击后: 仍在商城
+                    PokemonGoState.PURCHASE_PAGE])  # 重试后: 支付页出现
+    monkeypatch.setattr(adapter.detector, "wait_for_state",
+                        lambda states, timeout=0.2: next(results))
+
+    assert adapter.shop_auto.click_product(info) is True
+    assert len(clicks) == 2, \
+        f"第一次未出现必须自动再次点击(实际 {len(clicks)} 次)"
+
+
+def test_click_product_twice_then_fails(env, monkeypatch):
+    """两次点击后仍未出现 Google Play 页 → 才记录错误留档。"""
+    ctrl, adapter = env
+    from automation.pokemon_go.shop import ProductInfo
+    info = ProductInfo(name="100寶可", price="US$0.99",
+                       bbox=(100, 600, 300, 660), matched=True)
+    clicks = []
+    ctrl.click = lambda x, y: clicks.append((x, y))
+    monkeypatch.setattr(adapter.detector, "wait_for_state",
+                        lambda states, timeout=0.2: PokemonGoState.SHOP)
+
+    assert adapter.shop_auto.click_product(info) is False
+    assert len(clicks) == 2, \
+        f"最多点击 2 次(实际 {len(clicks)} 次)"
+    assert any("PURCHASE_PAGE_TIMEOUT" in p for p in ctrl._saved), \
+        "二次失败必须截图留档"

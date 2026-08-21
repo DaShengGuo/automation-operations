@@ -60,8 +60,8 @@ timeouts:
   detect_page: 60
   login: 90
   home: 120
-  popup: 15
-  task: 180
+  popup: 3            # 2026-08-21: 15→3 — 弹窗只做快速检查(规格: 主页后3秒内点菜单)
+  task: 90           # 2026-08-21: 180→90 — 商城全流程内部预算 ~60s, 不设180秒长兜底
   verify: 60
   logout: 30
   cleanup: 15

@@ -471,6 +471,19 @@ class DesktopAppController:
                 # SQLite accounts 表, 历史仍写 task_results)
                 self.scheduler = TaskScheduler(self.cfg,
                                               queue_manager=self.queue_manager)
+            # 启动前账号检查(规格 2026-08-21 §七): 队列模式无账号可执行
+            # (等待+运行中均为 0, 含停止后 INTERRUPTED 待恢复账号) →
+            # 弹窗提示并禁止启动 Worker — 绝不让无账号的空转启动。
+            if self.cfg.account_provider in ("manual_queue", ""):
+                totals = self.queue_manager.totals()
+                if totals["waiting"] == 0 and totals["running"] == 0:
+                    logger.info("[START] 检查账号列表 — 无账号可执行, "
+                                "禁止启动")
+                    self._set_state(ApplicationRunState.STOPPED)
+                    if self.bus is not None:
+                        self.bus.toast.emit(
+                            "error", "当前没有可执行账号\n请先添加账号密码")
+                    return
             # 文件来源先导入账号
             if self.cfg.account_provider in ("excel", "csv"):
                 added, err = self._import_file_accounts()

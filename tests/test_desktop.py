@@ -217,6 +217,47 @@ class TestController:
         assert not result["ok"]
         c.shutdown()
 
+    def test_start_without_accounts_blocked(self, tmp_data):
+        """规格 2026-08-21 §七: 队列模式无账号可执行 → 禁止启动 Worker,
+        弹窗提示「当前没有可执行账号」, 状态回到 STOPPED。"""
+        c = self._make_controller(tmp_data)
+        toasts = []
+
+        class _Toast:
+            def emit(self, kind, msg):
+                toasts.append((kind, msg))
+
+        class _AppState:
+            def emit(self, value):
+                pass
+
+        class _Bus:
+            toast = _Toast()
+            app_state = _AppState()
+
+        c.bus = _Bus()
+        c.scheduler = object()   # 非 None, 跳过 TaskScheduler 构建
+        c._start_scheduler_worker()
+        from desktop.runtime_state import ApplicationRunState
+        assert c.state == ApplicationRunState.STOPPED, \
+            "无账号必须回到 STOPPED(禁止启动)"
+        assert toasts and "没有可执行账号" in toasts[0][1], \
+            f"必须弹窗提示先添加账号(实际 {toasts})"
+        c.shutdown()
+
+    def test_start_with_pending_account_allowed(self, tmp_data):
+        """队列有等待账号 → 账号检查放行, 不拦截启动。"""
+        c = self._make_controller(tmp_data)
+        result = c.add_account("FAKE-DEV", "userA", "p1")
+        assert result["ok"]
+        c.scheduler = object()   # 非 None
+        c._start_scheduler_worker()
+        # 未触发无账号拦截: 状态被推进到 RUNNING(或 STARTING 后续流程)
+        from desktop.runtime_state import ApplicationRunState
+        assert c.state != ApplicationRunState.STOPPED, \
+            "有等待账号必须放行启动"
+        c.shutdown()
+
 
 class TestClaimSpecific:
     def test_claim_specific_binds_only_pending(self, tmp_path):
