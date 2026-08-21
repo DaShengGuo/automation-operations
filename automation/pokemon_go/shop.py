@@ -322,28 +322,27 @@ class ShopAutomation:
         first_pass = int(self.shop_cfg.get("scroll_first_pass", 6))
         second_pass = int(self.shop_cfg.get("scroll_second_pass", 3))
         self.log.info(f"[SHOP] 开始大幅滑动 {first_pass} 次")
-        # 滑动参数(规格 2026-08-21 §七): 坐标必须走 CoordinateMapper —
-        # 与 click_ratio 同一体系(含安全区 clamp)。旧裸换算在真机分辨率/
-        # 稳定边距不同时坐标可能落入系统手势区或超屏 → 触摸被系统截获
-        # →「日志显示滑动执行但页面不动」根因。基准 1080×2400:
-        # 中心 x=540, y=2200→100(规格: 屏幕底部附近→顶部附近)。
+        # 滑动参数(规格 2026-08-21 t9k4m §九~§十一): 起点必须避开商城
+        # 底部中央 X 关闭按钮(真机实测 (514,2158)) — 从中心 x=540 底部
+        # 开始的滑动按下即落在按钮上, 触摸被按钮消费: 列表不动, 甚至
+        # 误触关闭退出商城(「滑动无效」根因)。改为横向偏移区域:
+        #   x = 360(左三分之一, 远离中心按钮), y = 2100→300(按钮上方)。
+        # 坐标走 CoordinateMapper(与 click_ratio 同体系, 含 insets/clamp),
+        # 并避底部系统手势区。
         mapper = getattr(self.d, "mapper", None)
         if mapper is not None:
-            swipe_x = mapper.map_ratio(0.5, 0.5)[0]
-            swipe_y2 = mapper.map(540, 100)[1]   # 终点: 顶部附近
-            # 起点: 底部附近, 但必须避开系统底部手势区/导航条 —
-            # 从手势区开始的触摸会被系统截获(游戏收不到, 页面不动)。
-            # 稳定边距(insets.bottom)之上再留 80px 安全余量。
-            raw_y1 = mapper.map(540, 2200)[1]
+            swipe_x = mapper.map(360, 1050)[0]    # 横向偏移: 避开中心 X 按钮
+            swipe_y2 = mapper.map(360, 300)[1]    # 终点: 顶部附近
+            raw_y1 = mapper.map(360, 2100)[1]     # 起点: X 按钮(2158)上方
             bottom_margin = int(getattr(mapper.insets, "bottom", 0)) + 80
             max_y1 = max(1, getattr(self.d, "screen_h", 2400) - bottom_margin)
-            swipe_y1 = min(raw_y1, max_y1)
+            swipe_y1 = min(raw_y1, max_y1)        # 同时避系统底部手势区
         else:
             sw = max(1, getattr(self.d, "screen_w", 1080))
             sh = max(1, getattr(self.d, "screen_h", 2400))
-            swipe_x = sw // 2
-            swipe_y1 = min(int(sh * 0.917), sh - 80)  # 2200(基准), 避底边
-            swipe_y2 = int(sh * 0.042)                # 100(基准 2400)
+            swipe_x = int(sw * 0.333)             # 360(基准 1080)
+            swipe_y1 = min(int(sh * 0.875), sh - 80)  # 2100(基准), 避底边
+            swipe_y2 = int(sh * 0.125)                 # 300(基准 2400)
         self.log.info(f"[SHOP] 滑动坐标: ({swipe_x},{swipe_y1}) → "
                       f"({swipe_x},{swipe_y2}) duration=1.0s")
         try:

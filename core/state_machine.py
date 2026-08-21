@@ -43,7 +43,11 @@ TRANSITIONS: dict[WorkerState, set[WorkerState]] = {
                               WorkerState.IDLE},
     WorkerState.LOGIN: {WorkerState.WAIT_HOME, WorkerState.CLEANUP,
                         WorkerState.NEXT_ACCOUNT, WorkerState.RECOVERY},
-    WorkerState.WAIT_HOME: {WorkerState.HANDLE_POPUPS, WorkerState.RECOVERY},
+    # 2026-08-21 t9k4m: 主页检测成功后直接执行任务(弹窗在任务内部快速
+    # 处理), 不再经 HANDLE_POPUPS 状态 — 真机 MAP→HANDLE_POPUPS→EXECUTE_TASK
+    # →点菜单 链路曾导致 49 秒等待
+    WorkerState.WAIT_HOME: {WorkerState.HANDLE_POPUPS, WorkerState.EXECUTE_TASK,
+                            WorkerState.RECOVERY},
     # 弹窗处理后按页面状态路由(device_worker): HOME→EXECUTE_TASK,
     # LOGIN→LOGIN, 其他→DETECT_PAGE(run 12 实测崩溃: 非法状态迁移)
     WorkerState.HANDLE_POPUPS: {WorkerState.EXECUTE_TASK,

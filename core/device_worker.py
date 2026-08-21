@@ -512,7 +512,14 @@ class DeviceWorker(threading.Thread):
 
         elif state == WorkerState.WAIT_HOME:
             if self.detector_wait_home():
-                self._enter_state(WorkerState.HANDLE_POPUPS)
+                # 规格 2026-08-21 t9k4m §二: 主页检测成功后直接执行任务 —
+                # 不再经过 HANDLE_POPUPS 状态。弹窗在 execute_task 内部
+                # 快速处理(handle_popups 非阻塞, 无弹窗 <0.3s), 无独立
+                # 15s 弹窗状态(真机: MAP→HANDLE_POPUPS→EXECUTE_TASK→点菜单
+                # 的链路曾导致 49 秒等待)。
+                self.log.info("[MAP] 主页检测成功 — 直接进入任务(弹窗在"
+                              "任务内快速处理)")
+                self._enter_state(WorkerState.EXECUTE_TASK)
             else:
                 # 快速分流: 认证失败弹窗被点掉后回到登录页 —
                 # 直接重走 DETECT_PAGE→LOGIN, 不烧 30s 超时进 RECOVERY

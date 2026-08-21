@@ -17,12 +17,13 @@ version.py
   v1.3.1  流程提速(状态超时收紧)+滑动加长(2200→200)+商品点击重试+启动账号检查
   v1.3.2  启动拦截同步化+VPN只检一次+滑动坐标走CoordinateMapper
   v1.3.3  滑动手势区防御+三段滑动日志+注册页检测提速
+  v1.3.4  删MAP→HANDLE_POPUPS跳转+滑动起点避开X关闭按钮
   v2.0.0  重大架构升级
 """
 
 APP_NAME = "宝可梦自动化购买脚本"
 APP_NAME_EN = "PokemonAutomation"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 APP_VERSION_TAG = f"v{APP_VERSION}"
 APP_TITLE = "欢迎使用宝可梦自动化购买脚本"
 APP_PUBLISHER = "PokemonAutomation"

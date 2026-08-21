@@ -108,6 +108,10 @@ class TestWorkerPipeline:
         for state in ("START_GAME", "LOGIN", "EXECUTE_TASK",
                       "LOGOUT", "CLEANUP"):
             assert state in sources
+        # 规格 2026-08-21 t9k4m: 主页成功后直接 EXECUTE_TASK —
+        # 不经过 HANDLE_POPUPS(真机曾 49 秒等待)
+        assert "HANDLE_POPUPS" not in sources, \
+            "主页成功后不得经过 HANDLE_POPUPS 状态"
         # 下一账号预取: 队列空时 account 释放
         assert w.account is None
 
@@ -169,10 +173,14 @@ class TestWorkerPipeline:
 
         states = [s for s, _ in w.fsm.history]
         assert WorkerState.RECOVERY not in states  # 全程未误入恢复
-        # launch 已执行且流水线正常推进(登录甚至已完成)
+        # launch 已执行且流水线正常推进(登录甚至已完成)。
+        # 2026-08-21: 主页成功后直接 EXECUTE_TASK(不再经 HANDLE_POPUPS),
+        # 任务完成后继续 LOGOUT/CLEANUP — 合法状态集合放宽。
         assert "launch" in w.automation.calls
         assert w.fsm.state in (WorkerState.DETECT_PAGE, WorkerState.LOGIN,
-                               WorkerState.WAIT_HOME, WorkerState.HANDLE_POPUPS)
+                               WorkerState.WAIT_HOME, WorkerState.HANDLE_POPUPS,
+                               WorkerState.EXECUTE_TASK,
+                               WorkerState.VERIFY_TASK, WorkerState.LOGOUT)
 
     def test_task_failure_releases_account_and_moves_on(self, tmp_cfg, repos):
         """回归: 任务失败标记 RETRY/FAILED 后必须释放账号并领取下一个
