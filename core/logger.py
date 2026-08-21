@@ -111,9 +111,16 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> logging.Logger:
 
         root = logging.getLogger()
         root.setLevel(getattr(logging, level.upper(), logging.INFO))
+        # 实时日志防御(2026-08-21): clear 前保留外部自定义 handler
+        # (GUI 的 QtLogHandler) — 旧实现无条件 clear 会把它清掉,
+        # GUI 日志区永远空白(按类型名判断, 避免 core→desktop 依赖)
+        keep = [h for h in root.handlers
+                if type(h).__name__ == "QtLogHandler"]
         root.handlers.clear()
         root.addHandler(console)
         root.addHandler(main_file)
+        for h in keep:
+            root.addHandler(h)
 
         # uiautomator2 / adbutils 内部日志降噪
         for noisy in ("uiautomator2", "adbutils", "urllib3"):

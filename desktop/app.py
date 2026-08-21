@@ -35,15 +35,20 @@ def main() -> int:
     app.setApplicationName(APP_TITLE)
     app.setApplicationVersion(APP_VERSION)
 
-    # 事件总线 + 日志桥(root logger 的所有输出进入 GUI)
+    # 事件总线 + 日志桥(root logger 的所有输出进入 GUI)。
+    # 顺序关键(实时日志修复 2026-08-21): 必须先建 controller —
+    # 其内部 setup_logging() 会 root.handlers.clear() 重建文件/控制台
+    # handler, 后挂 QtLogHandler 才不会被清掉。旧顺序(先挂 handler
+    # 再建 controller)导致 QtLogHandler 被 clear, GUI 日志区永远空白。
     bus = QtEventBus()
+    controller = DesktopAppController(bus=bus)
+
     handler = QtLogHandler(bus)
     handler.setFormatter(StructuredFormatter())
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 
-    controller = DesktopAppController(bus=bus)
     window = MainWindow(controller, bus)
     window.show()
     return app.exec()

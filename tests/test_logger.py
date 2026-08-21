@@ -95,3 +95,28 @@ def test_load_with_explicit_game_name_still_works(tmp_path):
     _, _, _ = _register(tmp_path)
     cli_cfg = ControlConfig.load("pokemon_go")
     assert cli_cfg.game_name == "pokemon_go"
+
+
+def test_setup_logging_preserves_qt_log_handler(tmp_path):
+    """实时日志回归(2026-08-21): setup_logging() 的 root.handlers.clear()
+    不得清掉 GUI 的 QtLogHandler — 否则 GUI 日志区永远空白(实测事故)。
+    模拟 app.py 旧时序: 先挂 QtLogHandler 再 setup_logging, handler 必须存活。
+    """
+    import core.logger as cl
+
+    # 模拟 QtLogHandler(不依赖 PySide6, 只需类名匹配)
+    class QtLogHandler(logging.Handler):
+        def emit(self, record):
+            pass
+
+    root = logging.getLogger()
+    qt = QtLogHandler()
+    root.addHandler(qt)
+    try:
+        cl.setup_logging(tmp_path / "logs")
+        # QtLogHandler 必须仍在 root handlers 里
+        assert any(type(h).__name__ == "QtLogHandler" for h in root.handlers), \
+            "setup_logging 清掉了 QtLogHandler, GUI 实时日志会丢失"
+    finally:
+        root.handlers.clear()
+
