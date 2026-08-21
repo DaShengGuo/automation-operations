@@ -277,8 +277,14 @@ class ExternalWebContext:
         return None
 
     def wait_game_return(self, timeout: float = 120) -> bool:
-        """等待网页认证完成后系统自动返回 Pokémon GO"""
+        """等待网页认证完成后系统自动返回 Pokémon GO
+
+        规格 §四: Login→主页人工 ≥30s 资源加载, 不误判卡死。0.5s 快速
+        轮询(命中即返) + 每 5s 检查点进度日志 + 错误早失败(不烧满超时)。
+        """
         deadline = time.time() + timeout
+        t0 = time.time()
+        last_log = 0.0
         last_err_check = 0.0
         resubmitted = False  # 弹窗死锁后重提一次(有界)
         while time.time() < deadline:
@@ -287,8 +293,16 @@ class ExternalWebContext:
             if cb:
                 cb()
             if self.detector.is_game_foreground():
-                self.log.info("[PTC] 已返回游戏")
+                self.log.info(f"[PTC] 已返回游戏 (用时 "
+                              f"{time.time() - t0:.0f}s)")
                 return True
+            # 检查点进度日志(规格 §四): 每 5s 一次, 让 ≥30s 等待节奏可视
+            now = time.time()
+            if now - last_log >= 5.0:
+                self.log.info(f"[步骤] 等待游戏返回 (已等 "
+                              f"{now - t0:.0f}s, "
+                              f"外部上下文={self.detector.is_external_context()})")
+                last_log = now
             # 网页上可能还有继续/授权按钮(正常授权步骤)
             self._handle_web_continue_buttons()
             # MIUI 密码保存弹窗压住浏览器会停滞认证(run 12 实测根因)

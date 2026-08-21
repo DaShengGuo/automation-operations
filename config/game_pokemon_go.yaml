@@ -53,8 +53,8 @@ register_recovery:
   max_rounds: 3
   click_retries: 2
   anti_double_click_sec: 3.0
-  redetect_wait: 30
-  reenter_wait: 60
+  redetect_wait: 15          # L1 重新检测注册页上限(规格 §二: 15s, wait_for_state 0.2s 快速轮询命中即返)
+  reenter_wait: 30
 
 # ── 页面识别规则(检测顺序 = 定义顺序) ──────────────────────
 # ocr_rules: 关键词组列表(组内 AND, 组间 OR)。片段匹配以容忍

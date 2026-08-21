@@ -466,16 +466,21 @@ class PokemonGoAdapter(BaseGameAutomation):
         # 2. 登录方式页 → 点寶可夢訓練家中心。
         #    真机观察: 游戏记住上次登录方式(PTC)时, RETURNING_PLAYER 之后
         #    加载完直接自动跳浏览器, 方式页可能不出现 — 两条路径都接受。
-        #    ptc_provider 预算 8s(人工 <1s; 规格 §三 5s 上限, 留余量)。
+        #    ptc_provider 预算 8s(人工 <1s; 规格 §三 0.3/0.5/1/2s 渐进轮询,
+        #    页面一出现立即点击, 不固定 sleep)。
         deadline = time.time() + self.sel.timeout("ptc_provider", 8)
         state = PokemonGoState.GAME_LOADING
+        # 渐进轮询间隔(规格 §三): 0.3→0.5→1→2s, 中央站人工 <1s 出现
+        intervals = [0.3, 0.5, 1.0, 2.0]
+        iv_idx = 0
         while time.time() < deadline:
             state = self.detect_state()
             if state == PokemonGoState.LOGIN_PROVIDER:
                 break
-            if self.detector.wait_external_context(2):
+            if self.detector.is_external_context():
                 break  # 已自动跳浏览器
-            time.sleep(2)
+            time.sleep(intervals[min(iv_idx, len(intervals) - 1)])
+            iv_idx += 1
         if state == PokemonGoState.LOGIN_PROVIDER:
             self._checkpoint("检测到中央站, 点击寶可夢訓練家中心")
             self._mark_trace("LOGIN_PROVIDER_FOUND")
