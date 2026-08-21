@@ -94,14 +94,28 @@ class PokemonGoAdapter(BaseGameAutomation):
 
     # ── 通用接口映射 ──
 
+    def _phase_t0(self):
+        """阶段计时起点(login/launch 等流程入口调用, 供检查点日志打相对时间戳)"""
+        self._phase_start = time.time()
+
+    def _elapsed(self) -> float:
+        return time.time() - getattr(self, "_phase_start", time.time())
+
+    def _checkpoint(self, msg: str):
+        """检查点日志(规格十一): [MM:SS] msg — 流程节奏全程可视"""
+        sec = int(self._elapsed())
+        self.log.info(f"[{sec // 60:02d}:{sec % 60:02d}] {msg}")
+
     def launch(self) -> bool:
         """智能启动: 已在正确页面时不重启"""
+        self._phase_t0()
         state = self.detect_state()
         if state in (PokemonGoState.RETURNING_PLAYER, PokemonGoState.MAP,
                      PokemonGoState.GAME_LOADING,
                      PokemonGoState.LOGIN_PROVIDER):
             self.log.info(f"[launch] 已在 {state.value}, 无需重启")
             return True
+        self._checkpoint("启动游戏")
         if self.d.is_app_running():
             # 游戏进程在跑但不在已知页面 → 拉前台(不 force-stop)。
             # 不固定 sleep: wait_for_state 本身就是 0.2s 快速轮询,
@@ -113,7 +127,10 @@ class PokemonGoAdapter(BaseGameAutomation):
             [PokemonGoState.GAME_SPLASH, PokemonGoState.RETURNING_PLAYER,
              PokemonGoState.MAP, PokemonGoState.GAME_LOADING],
             timeout=self.cfg.state_timeout("launch"))
-        self.log.info(f"[launch] 启动完成, 当前={state.value}")
+        if state != PokemonGoState.UNKNOWN:
+            self._checkpoint(f"启动完成, 当前={state.value}")
+        else:
+            self.log.warning(f"[launch] 启动超时, 当前={state.value}")
         return state != PokemonGoState.UNKNOWN
 
     def detect_state(self) -> PokemonGoState:
@@ -417,6 +434,7 @@ class PokemonGoAdapter(BaseGameAutomation):
         self._active_account = account.masked()
         self.last_action = "login_start"
         self.last_action_ts = time.time()
+        self._phase_t0()   # 登录流程计时起点(规格十一检查点日志)
         self._purchase_ok = False   # 新账号周期: 未购买前禁止登出
         # 已在地图 = 已登录
         if self.detect_state() == PokemonGoState.MAP:
@@ -438,15 +456,18 @@ class PokemonGoAdapter(BaseGameAutomation):
             time.sleep(2)
 
         # 1. 已註冊的玩家(§14: 点击失败不直接重启 — 先走注册页分级恢复)
+        self._checkpoint("等待注册页面(已註冊/未註冊)")
         if not self.click_returning_player():
             if not self.register_recovery.recover():
                 self.log.error("[登录] 注册选择页分级恢复失败, 交由 Worker 预算决定")
                 return LoginResult.TIMEOUT
+        self._checkpoint("已点击已注册, 等待中央站/登录入口")
 
         # 2. 登录方式页 → 点寶可夢訓練家中心。
         #    真机观察: 游戏记住上次登录方式(PTC)时, RETURNING_PLAYER 之后
         #    加载完直接自动跳浏览器, 方式页可能不出现 — 两条路径都接受。
-        deadline = time.time() + self.sel.timeout("ptc_provider", 60)
+        #    ptc_provider 预算 8s(人工 <1s; 规格 §三 5s 上限, 留余量)。
+        deadline = time.time() + self.sel.timeout("ptc_provider", 8)
         state = PokemonGoState.GAME_LOADING
         while time.time() < deadline:
             state = self.detect_state()
@@ -456,26 +477,28 @@ class PokemonGoAdapter(BaseGameAutomation):
                 break  # 已自动跳浏览器
             time.sleep(2)
         if state == PokemonGoState.LOGIN_PROVIDER:
+            self._checkpoint("检测到中央站, 点击寶可夢訓練家中心")
             self._mark_trace("LOGIN_PROVIDER_FOUND")
             if not self.click_ptc_provider(timeout=15):
                 return LoginResult.UNKNOWN
 
-        # 3. 系统跳转浏览器(浏览器无关)
+        # 3. 系统跳转浏览器(浏览器无关) — ptc_redirect 预算 15s(人工 ~3s)
         if not self.web.wait_leave_game(
-                timeout=self.sel.timeout("ptc_redirect", 60)):
+                timeout=self.sel.timeout("ptc_redirect", 15)):
             return LoginResult.TIMEOUT
 
-        # 4. 等 PTC 登录页(允许慢加载/白屏)
+        # 4. 等 PTC 登录页(允许慢加载/白屏) — ptc_page_loading 预算 12s(人工 ~3s)
         if not self.web.wait_ptc_login_page(
-                timeout=self.sel.timeout("ptc_page_loading", 60)):
+                timeout=self.sel.timeout("ptc_page_loading", 12)):
             # 尝试一次网页失败恢复
             if not self.recovery_auto.recover_web_failure():
                 return LoginResult.WEB_ERROR
             # 恢复后重试表单
             if not self.web.wait_ptc_login_page(
-                    timeout=self.sel.timeout("ptc_page_loading", 60)):
+                    timeout=self.sel.timeout("ptc_page_loading", 12)):
                 return LoginResult.WEB_ERROR
 
+        self._checkpoint("账号密码页面就绪")
         self.capture_keyframe("PTC_LOGIN_PAGE")
 
         # 5. 填用户名
@@ -495,11 +518,12 @@ class PokemonGoAdapter(BaseGameAutomation):
         # 7. 提交
         if not self.web.submit_login():
             return LoginResult.UNKNOWN
+        self._checkpoint("已提交 Login, 等待游戏资源加载回主页(≥30s 勿误判卡死)")
         self.log.info("[登录] 已提交, 等待认证与游戏返回")
 
-        # 8. 等待返回游戏
+        # 8. 等待返回游戏 — auth_return 预算 50s(人工 ≥30s 资源加载; 规格 §五)
         if not self.web.wait_game_return(
-                timeout=self.sel.timeout("auth_return", 120)):
+                timeout=self.sel.timeout("auth_return", 50)):
             error = self.web.classify_error()
             if error is not None:
                 self.capture_keyframe("PTC_LOGIN_ERROR")
@@ -507,6 +531,7 @@ class PokemonGoAdapter(BaseGameAutomation):
             self.log.error("[AUTH_RETURN_TIMEOUT] 截图记录")
             self.capture_keyframe("AUTH_RETURN_TIMEOUT")
             return LoginResult.TIMEOUT
+        self._checkpoint("登录完成, 已返回游戏")
 
         return LoginResult.SUCCESS
 
@@ -744,27 +769,29 @@ class PokemonGoAdapter(BaseGameAutomation):
 
     def execute_task(self, account: Account) -> TaskOutcome:
         """商店任务: 主菜单 → 商店 → 找 100寶可幣 → 购买(mode) → 关商店"""
+        self._phase_t0()   # 任务流程计时起点(规格十一检查点日志)
         try:
             # 先清弹窗: 模态弹窗(週間大挑戰等)会吞掉主菜单的精灵球点击
             self.handle_popups()
             # MAP → 主菜单(步级预算 menu_open)
-            self.log.info("[步骤] 打开主菜单")
+            self._checkpoint("打开主菜单")
             if self.detect_state() != PokemonGoState.MAIN_MENU:
                 if not self.logout_auto.open_main_menu(
                         timeout=self._step_budget("menu_open", 15)):
                     return TaskOutcome(False, "OPEN_MAIN_MENU",
                                        "无法打开主菜单")
             # 商店(步级预算 shop_entry)
-            self.log.info("[步骤] 点击商城")
+            self._checkpoint("点击商城")
             if not self.shop_auto.enter_shop():
                 return TaskOutcome(False, "ENTER_SHOP", "无法进入商店")
-            self.log.info("[步骤] 商城加载成功")
+            self._checkpoint("商城加载成功, 开始滑动到底部")
             self.capture_keyframe("SHOP")
             # 找商品(商城异常退出 → 有界重进 ≤ shop_reenter 次)
             info = self._find_product_with_guards()
             if info is None:
                 return TaskOutcome(False, "PRODUCT_NOT_FOUND",
                                    "滚动结束未找到目标商品")
+            self._checkpoint(f"找到目标商品: {info.name} ({info.price})")
             self.capture_keyframe("PRODUCT_FOUND")
             # 点击 → Google Play
             if not self.shop_auto.click_product(info):
@@ -789,12 +816,12 @@ class PokemonGoAdapter(BaseGameAutomation):
                 self.capture_keyframe("PURCHASE_UNCONFIRMED")
             if result == "SUCCESS":
                 self.capture_keyframe("PURCHASE_SUCCESS")
-                self.log.info("[步骤] 购买完成")
+                self._checkpoint("购买完成")
             # 关商店回地图
-            self.log.info("[步骤] 关闭商城, 返回主页面")
+            self._checkpoint("关闭商城, 返回主页面")
             self.shop_auto.close_shop()
             state = self.detect_state()
-            self.log.info(f"[步骤] 主页面恢复: state={state.value}")
+            self._checkpoint(f"主页面恢复: state={state.value}")
             # 任务成功(含 dry_run 只读完成/manual 人工购买完成) →
             # 解锁登出守卫: 只有走到这里才允许 LOGOUT
             self._purchase_ok = True

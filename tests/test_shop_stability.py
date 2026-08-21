@@ -150,6 +150,40 @@ def test_find_product_kicked_out_stops_early(env):
         f"检测到首页 UI 出现必须立即停止滑动(实际 {ctrl.up_swipes} 次)"
 
 
+# ── 4b: 商城滑动状态保护锁(规格九) — 滑动期间 scrolling=True, 退出释放 ──
+
+def test_shop_scroll_state_lock_released_on_exit(env):
+    """find_product 退出时(到底/异常/找到)必须释放 scrolling 锁。
+
+    规格§九: 商城滑动期间锁定状态 SHOP_SCROLLING, 只有商城到底或异常
+    才能改变状态。锁泄漏会导致后续流程误判仍在滑动。
+    """
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    assert adapter.shop_auto.scrolling is False, "初始未滑动, 锁应释放"
+
+    info = adapter.shop_auto.find_product(max_scroll=12)
+    # 无论结果(到底未找到), 退出后锁必须释放
+    assert adapter.shop_auto.scrolling is False, \
+        "find_product 退出后必须释放 scrolling 锁"
+    assert info is None  # 脚本场景无目标商品
+
+
+def test_shop_scroll_state_lock_released_on_exception(env, monkeypatch):
+    """滑动中抛异常也必须释放锁(finally 语义)。"""
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+
+    def boom(*a, **k):
+        raise RuntimeError("模拟滑动异常")
+    monkeypatch.setattr(adapter.shop_auto, "_detect_product", boom)
+
+    with pytest.raises(RuntimeError):
+        adapter.shop_auto.find_product(max_scroll=12)
+    assert adapter.shop_auto.scrolling is False, \
+        "异常路径也必须释放 scrolling 锁(finally)"
+
+
 # ── 5: 异常退出 → 重进商城(≤2) → 找到商品 ───────────────────────
 
 def test_find_product_with_guards_reenters_bounded(env, monkeypatch):

@@ -21,13 +21,15 @@ image:
 automation:
   step_interval: 1
 
-# 各阶段超时(秒)
+# 各阶段超时(秒) — 以人工实测耗时为基准(规格 2026-08-21):
+#   启动→注册页 ~9s / 点已注册→中央站 <1s / 点中央站→账密页 ~3s
+#   Login→主页 ≥30s(资源加载, 勿误判卡死) / 进店+滑底 ~3s
 timeouts:
-  ptc_provider: 60         # RETURNING_PLAYER 后等登录方式页(游戏可能直接自动跳浏览器)
-  ptc_redirect: 60         # 点击PTC → 系统跳转浏览器
-  ptc_page_loading: 60     # 网页加载(允许白屏→慢加载)
-  auth_return: 75          # 网页认证 → 自动返回游戏(正常 32-50s; 75s 快速失败后重试用已建立的浏览器会话, 不干等 2 分钟)
-  game_loading: 120        # 游戏加载
+  ptc_provider: 8          # 点已注册→登录方式页(人工 <1s; 8s 上限, 超时交恢复)
+  ptc_redirect: 15         # 点击PTC → 系统跳转浏览器(人工 ~3s)
+  ptc_page_loading: 12     # 网页账密页加载(人工 ~3s; 允许白屏→慢加载, 12s 上限)
+  auth_return: 50          # Login→游戏主页(人工 ≥30s 资源加载; 50s 超时恢复, 勿误判卡死)
+  game_loading: 60         # 游戏加载
   shop_find: 90            # 商店滚动找商品总时长
   purchase_manual: 300     # manual 模式人工确认等待
   logout_verify: 60        # 退出后验证 RETURNING_PLAYER
@@ -39,7 +41,7 @@ budgets:
   home_rounds: 2           # wait_home 最大轮次(两轮仍不进主页交 RECOVERY)
   menu_open: 15            # 打开主菜单
   shop_entry: 15           # 点击商城 → 商城页出现
-  shop_scroll: 15          # 商城快速滑底阶段(判底靠连续两次截图无变化)
+  shop_scroll: 10          # 商城快速滑底阶段(人工进店+滑底~3s; 判底靠连续两次截图无变化)
   shop_find: 40            # 商城找商品总预算(滑底+4屏搜索+回滚)
   shop_reenter: 2          # 商城异常退出(首页UI出现)重进上限
   purchase_page: 20        # 点击商品 → Google Play 购买页出现

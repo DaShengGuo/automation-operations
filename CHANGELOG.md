@@ -5,6 +5,38 @@
 
 ---
 
+## v1.2.3 — 流程时间对齐人工实测 + 商城滑动状态锁 (2026-08-21)
+
+以人工实测耗时为基准(启动→注册页 ~9s / 点已注册→中央站 <1s /
+点中央站→账密页 ~3s / Login→主页 ≥30s / 进店+滑底 ~3s)重调全流程
+超时, 消除「等待时间与真实加载不匹配」:
+
+1. **超时值对齐人工实测(config/timeouts + budgets)**:
+   - ptc_provider 60s→8s(点已注册→中央站, 人工 <1s)
+   - ptc_redirect 60s→15s(点中央站→跳浏览器, 人工 ~3s)
+   - ptc_page_loading 60s→12s(网页账密页, 人工 ~3s)
+   - auth_return 75s→50s(Login→主页资源加载, 人工 ≥30s, 50s 超时恢复)
+   - game_loading 120s→60s; shop_scroll 15s→10s(进店+滑底人工 ~3s)
+   - adapter.login 代码内写死的默认值同步更新(60/60/120→8/12/50)。
+2. **商城滑动状态保护锁(规格§九)**: ShopAutomation.scrolling 标记,
+   find_product 进入置 True、退出(到底/异常/找到/超预算)finally 释放。
+   滑动期间锁定 SHOP_SCROLLING, 禁止外部状态机介入返回主页/登录/
+   下一账号/APP重启 — 只有商城到底或异常才能改变状态。
+3. **判底灰度通道修复**: shop.find_product 旧用 cv2.COLOR_RGB2GRAY,
+   与全局截图 BGR 通道约定不一致(detector 用 BGR2HSV) — 改 BGR2GRAY,
+   判底 diff 计算与检测器统一。
+4. **检查点日志(规格§十一)**: adapter 新增 _phase_t0/_elapsed/_checkpoint,
+   launch/login/execute_task 全流程打 [MM:SS] 相对时间戳日志
+   (启动游戏/等待注册页面/已点击已注册/检测到中央站/账号密码页面就绪/
+   已提交 Login 等待资源加载/登录完成/打开主菜单/点击商城/商城加载成功/
+   找到目标商品/购买完成/关闭商城/主页面恢复)。滑动中异常退出补
+   [ERROR] 日志 + SHOP_KICKED_OUT_DURING_SCROLL 截图; 滑底超预算补
+   SHOP_SCROLL_BUDGET_EXCEEDED 截图。
+
+- **测试**: 新增 test_shop_scroll_state_lock_released_on_exit(到底释放锁)
+  + test_shop_scroll_state_lock_released_on_exception(异常路径 finally 释放),
+  全量 356 条通过。
+
 ## v1.2.2 — 启动等待智能化: 检查点日志 + MAP 二次确认 (2026-08-21)
 
 针对「游戏已进入主页但脚本仍等几十秒」的启动等待优化(在 v1.2.1 步级
