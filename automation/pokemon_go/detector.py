@@ -26,7 +26,10 @@ logger = logging.getLogger(__name__)
 class PokemonGoPageDetector:
     """每台设备一个实例(线程隔离)"""
 
-    # 检测顺序: 先具体后通用
+    # 检测顺序: 先具体后通用。
+    # 真机教训(2026-08-21): SHOP 必须在 MAIN_MENU 之前 — 商城页可能含
+    # "Shop" 文字, 若 MAIN_MENU 先判可能抢判为主菜单 → 滑动中 _shop_still_open
+    # 误触发 kicked_out 异常退出商城(客户「滑几次就退出商城」根因)。
     DETECT_ORDER = [
         PokemonGoState.PTC_LOGIN_ERROR,
         PokemonGoState.LOGOUT_CONFIRM,
@@ -38,8 +41,8 @@ class PokemonGoPageDetector:
         PokemonGoState.PROFESSOR_DIALOG,
         PokemonGoState.WELCOME_PAGE,
         PokemonGoState.SETTINGS,
-        PokemonGoState.MAIN_MENU,
         PokemonGoState.SHOP,
+        PokemonGoState.MAIN_MENU,
         PokemonGoState.LOGIN_FAILED_DIALOG,  # 弹窗含「中央站」描述文本, 必须先于 LOGIN_PROVIDER
         PokemonGoState.LOGIN_PROVIDER,
         PokemonGoState.RETURNING_PLAYER,

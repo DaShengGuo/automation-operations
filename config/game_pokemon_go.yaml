@@ -112,7 +112,11 @@ states:
     min_hits: 1
   MAIN_MENU:
     # 真机主菜单独有词: 圖鑑/對戰(商店商品区不会出现)。
-    # 注意: 不能用「道具/入場券」— 商店页也有(实测误判)
+    # 注意: 不能用「道具/入場券」— 商店页也有(实测误判)。
+    # 真机教训(2026-08-21): 旧含 [Shop, Settings] 组 — 商城页也有 "Shop"
+    # 文字, 滑动中某帧 OCR 识别到 Shop 即误判 MAIN_MENU → _shop_still_open
+    # 触发 kicked_out → 滑动中止重进商城(客户「滑几次异常退出」根因)。
+    # 主菜单已有圖鑑/對戰/Pokédex/Battle 等独有词, 不需要此组。
     ocr_rules:
       - [圖鑑]
       - [宝可梦, 图鉴]
@@ -120,7 +124,6 @@ states:
       - [對戰]
       - [对战]
       - [Battle]
-      - [Shop, Settings]
     min_hits: 1
   SHOP:
     # 商店页特征(避开与主菜单/设置页冲突的词)。

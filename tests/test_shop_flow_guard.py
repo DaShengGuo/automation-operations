@@ -102,8 +102,13 @@ class ShopCtrl:
         else:
             self.down_swipes += 1
 
-    def swipe(self, *a, **k):
-        pass
+    def swipe(self, x1, y1, x2, y2, duration=0.3):
+        # shop.find_product 用精确坐标上滑(y1>y2), 需累加 up_swipes 以便
+        # 到底判定测试能校验滑动次数(与 swipe_direction 等价)
+        if y1 > y2:
+            self.up_swipes += 1
+        else:
+            self.down_swipes += 1
 
     def app_start(self, package="", activity=None):
         self._pkg = self.package

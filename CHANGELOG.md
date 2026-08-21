@@ -5,6 +5,35 @@
 
 ---
 
+## v1.2.4 — 商城滑动误退出根因修复: MAIN_MENU 误判 + 滑动参数 (2026-08-21)
+
+用户实况「进商城后滑几次就异常退出商城」+ 重点排查方向「不是商城加载慢,
+而是滑动期间被状态机误判强制退出」。定位真正根因并修复:
+
+1. **MAIN_MENU 误判商城页(核心根因)**: MAIN_MENU 旧含 OCR 规则
+   `[Shop, Settings]` — 商城页也有 "Shop" 文字, 滑动中某帧 OCR 识别到
+   Shop 即命中 MAIN_MENU → `_shop_still_open` 触发 kicked_out → 滑动
+   中止 + 重进商城(客户「滑几次异常退出」根因)。且 DETECT_ORDER 里
+   MAIN_MENU 在 SHOP 之前, 商城页被抢判。修复: ① 删除 `[Shop, Settings]`
+   组(主菜单已有圖鑑/對戰/Pokédex/Battle 等独有词, 不需要此组);
+   ② DETECT_ORDER 把 SHOP 提到 MAIN_MENU 之前(商城优先判定)。
+2. **滑动参数对齐人工实测(规格)**: 旧用 `swipe_direction("up", 0.8)`
+   大幅度方向滑动。改精确坐标上滑 start_y=1800→end_y=400(基准 2400,
+   ratio 0.75→0.167, 自动适配分辨率), duration=500ms, 间隔 0.4s
+   (规格 0.3~0.8s) — 人工实测 3 秒到底。进店后第一次循环直接滑动,
+   不等待(规格: 进店即滑)。
+3. **商城滑动 BACK 守卫(规格§九)**: back_safe 新增 scrolling 标记旁路 —
+   shop_auto.scrolling=True 时一律拒绝 BACK。滑动中状态可能短暂 UNKNOWN
+   (OCR 未识别商品文字), 若此时恢复链路按 BACK 会退出商城。滑动期间禁止
+   任何退出逻辑(返回主页/登录/切账号/重启)。
+4. **商城流程日志(规格§十一)**: enter_shop + find_product 全程 [SHOP] 日志
+   (点击商城/商城页面确认/开始第N次滑动/检测到底/找到目标商品)。
+
+- **测试**: 新增 test_back_guard_rejected_during_scroll(滑动中 BACK 拒绝)
+  + test_shop_not_misdetected_as_main_menu(商城含 Shop 文字不误判主菜单);
+  TestShopFastScrollToBottom 2 条适配精确坐标滑动(swipe mock);
+  ShopCtrl/StabilityCtrl swipe mock 同步累加 up_swipes。全量 358 条通过。
+
 ## v1.2.3 — 流程时间对齐人工实测 + 商城滑动状态锁 (2026-08-21)
 
 以人工实测耗时为基准(启动→注册页 ~9s / 点已注册→中央站 <1s /

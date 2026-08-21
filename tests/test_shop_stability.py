@@ -56,6 +56,17 @@ class StabilityCtrl(ShopCtrl):
                 self.up_swipes >= self.kick_after_up_swipes:
             self.scene = "MENU"
 
+    def swipe(self, x1, y1, x2, y2, duration=0.3):
+        # shop.find_product 改用精确坐标上滑(y1>y2), 需在此累加 up_swipes
+        # 并触发 kick 逻辑(与 swipe_direction 等价)
+        if y1 > y2:   # 上滑
+            self.up_swipes += 1
+            if self.kick_after_up_swipes is not None and \
+                    self.up_swipes >= self.kick_after_up_swipes:
+                self.scene = "MENU"
+        else:         # 下滑
+            self.down_swipes += 1
+
     def app_start(self, package="", activity=None):
         self._pkg = self.package
         self.app_starts += 1
@@ -182,6 +193,47 @@ def test_shop_scroll_state_lock_released_on_exception(env, monkeypatch):
         adapter.shop_auto.find_product(max_scroll=12)
     assert adapter.shop_auto.scrolling is False, \
         "异常路径也必须释放 scrolling 锁(finally)"
+
+
+# ── 4c: 商城滑动中 BACK 守卫拒绝(规格§九 — 滑动期间禁止退出逻辑) ──
+
+def test_back_guard_rejected_during_scroll(env, monkeypatch):
+    """scrolling=True 时 back_safe 必须拒绝, 防误退商城。
+
+    规格§九排查重点: 「滑几次后退出商城」可能是 watchdog/恢复链路在滑动中
+    按 BACK。滑动中状态可能短暂 UNKNOWN(OCR 未识别), 若此时 BACK 放行
+    会退出商城。back_safe 必须感知 scrolling 标记一律拒绝。
+    """
+    ctrl, adapter = env
+    # 模拟滑动中(不真跑 find_product, 直接置锁)
+    adapter.shop_auto.scrolling = True
+    assert adapter.back_safe() is False, \
+        "商城滑动中(scrolling=True) BACK 必须被守卫拒绝"
+    adapter.shop_auto.scrolling = False   # 复位
+
+
+# ── 4d: MAIN_MENU 规则不再误判商城页(根因: 旧 [Shop,Settings] 组) ──────
+
+def test_shop_not_misdetected_as_main_menu(env, monkeypatch):
+    """商城页含 "Shop" 文字不得误判为 MAIN_MENU。
+
+    真机教训(2026-08-21): MAIN_MENU 旧含 [Shop, Settings] OCR 组, 商城页
+    也有 "Shop" → 滑动中某帧命中 → 误判主菜单 → _shop_still_open 触发
+    kicked_out → 滑动中止重进(客户「滑几次异常退出商城」根因)。
+    修复: 删除该组 + DETECT_ORDER 把 SHOP 提到 MAIN_MENU 之前。
+    """
+    ctrl, adapter = env
+    # 商城页 OCR 文本含 Shop(模拟真机商城顶部标题/按钮)
+    monkeypatch.setattr(
+        "core.ocr.ocr_with_boxes",
+        lambda img, min_conf=0.5: [("Shop", (10, 10, 200, 60)),
+                                   ("寶可幣", (10, 100, 300, 160))])
+    monkeypatch.setattr(ctrl, "screenshot",
+                        lambda: np.zeros((2400, 1080, 3), dtype=np.uint8))
+    adapter.detector.bust_caches()
+    state = adapter.detect_state()
+    assert state == PokemonGoState.SHOP, \
+        f"商城页(含 Shop 文字)必须判 SHOP, 不得误判 MAIN_MENU(实际={state.value})"
 
 
 # ── 5: 异常退出 → 重进商城(≤2) → 找到商品 ───────────────────────

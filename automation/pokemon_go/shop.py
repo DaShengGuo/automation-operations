@@ -84,9 +84,10 @@ class ShopAutomation:
         offset = self.shop_cfg.get("entry_click_offset") or [0, 160]
         timeout = timeout or self.a._step_budget("shop_entry", 15)
         menu_timeout = self.a._step_budget("menu_open", 15)
+        self.log.info("[SHOP] 点击商城")
         # 已在商城(异常退出后重进场景) → 无需再点
         if self.detector.detect() == PokemonGoState.SHOP:
-            self.log.info("[步骤] 商城已加载(重进直接使用)")
+            self.log.info("[SHOP] 商城页面确认(已在商城, 直接滑动)")
             return True
         for attempt in range(max_wrong_page_retries + 1):
             state = self.detector.detect()
@@ -134,6 +135,7 @@ class ShopAutomation:
                 [PokemonGoState.SHOP, PokemonGoState.SETTINGS,
                  PokemonGoState.MAIN_MENU], timeout=timeout)
             if state == PokemonGoState.SHOP:
+                self.log.info("[SHOP] 商城页面确认 — 立即开始滑动")
                 self.a._mark_trace("SHOP_ENTERED")
                 return True
             if state == PokemonGoState.SETTINGS:
@@ -231,10 +233,19 @@ class ShopAutomation:
             "amount", "100"))
         scroll_budget = self.a._step_budget("shop_scroll", 10)
         find_budget = self.a._step_budget("shop_find", 40)
-        self.log.info("[步骤] 开始滑动到底部")
+        self.log.info("[SHOP] 开始滑动到底部")
         t0 = time.time()
+        # 滑动参数(规格 2026-08-21): 精确坐标上滑, 非大幅度方向滑动。
+        #   start_y=1800→end_y=400(基准 2400 高, ratio 0.75→0.167),
+        #   duration=500ms, 间隔 0.3~0.8s — 人工实测 3 秒到底。
+        sw = max(1, getattr(self.d, "screen_w", 1080))
+        sh = max(1, getattr(self.d, "screen_h", 2400))
+        swipe_x = sw // 2
+        swipe_y1 = int(sh * 0.75)   # 1800(基准)
+        swipe_y2 = int(sh * 0.167)  # 400(基准)
         try:
-            # 阶段 1: 快速滑底 + 周期性商品快检 + 容差判底
+            # 阶段 1: 立即连续上滑 + 周期性商品快检 + 容差判底
+            # 进店后不等待 — 第一次循环直接滑动(规格: 进店即滑, 3秒到底)
             last_small = None
             stale_count = 0
             for scroll in range(max_scroll):
@@ -250,7 +261,7 @@ class ShopAutomation:
                         return None
                     info = self._detect_product(target_amount)
                     if info and info.matched:
-                        self.log.info(f"[商店] 找到目标商品: {info.name} "
+                        self.log.info(f"[SHOP] 找到目标商品: {info.name} "
                                       f"({info.price}) (滚动 {scroll} 次)")
                         self.a._mark_trace("PACKAGE_FOUND")
                         return info
@@ -273,19 +284,22 @@ class ShopAutomation:
                     stale_count = 0
                 last_small = small
                 if stale_count >= 2:
-                    self.log.info(f"[步骤] 商城到底: 连续两次截图无变化 "
-                                  f"(滚动 {scroll} 次) — 停止滑动")
+                    self.log.info(f"[SHOP] 检测到底 (连续两次截图无变化, "
+                                  f"滚动 {scroll} 次) — 停止滑动")
                     self.a._mark_trace("SHOP_BOTTOM_REACHED")
                     break
                 # 滑底阶段预算: 超时不再滑, 直接进入搜索阶段(§五)
                 if time.time() - t0 > scroll_budget:
-                    self.log.warning(f"[商店] 滑底阶段超预算({scroll_budget}s) "
+                    self.log.warning(f"[SHOP] 滑底阶段超预算({scroll_budget}s) "
                                      f"— 停止滑动, 进入搜索阶段")
                     self.a.capture_keyframe("SHOP_SCROLL_BUDGET_EXCEEDED")
                     break
-                self.log.info(f"[商店] 快速滑底中, 上滑第 {scroll + 1} 次")
-                self.d.swipe_direction("up", distance=0.8)
-                time.sleep(0.5)
+                self.log.info(f"[SHOP] 开始第 {scroll + 1} 次滑动")
+                # 精确坐标上滑(duration 0.5s) — 比方向滑动可控, 不触边
+                self.d.swipe(swipe_x, swipe_y1, swipe_x, swipe_y2,
+                             duration=0.5)
+                # 间隔 0.3~0.8s(规格): 让页面渲染稳定再判底, 但不卡顿
+                time.sleep(0.4)
 
             # 阶段 2: 底部往上 4 屏 OCR 搜索
             for i in range(4):

@@ -1026,6 +1026,9 @@ class TestShopFastScrollToBottom:
         """商品在滚动途中出现 → 立即返回, 不再多滑"""
         a = self._make()
         swipes = []
+        # find_product 用精确坐标上滑(y1>y2), mock swipe 记录每次调用
+        a.d.swipe = lambda x1, y1, x2, y2, duration=0.3: \
+            swipes.append((x1, y1, x2, y2))
         a.d.swipe_direction = lambda direction, distance=0.5: \
             swipes.append((direction, distance))
         # 截图内容持续变化(列表滚动中, 判底不触发)
@@ -1044,10 +1047,13 @@ class TestShopFastScrollToBottom:
 
         assert info is not None and info.matched
         assert info.price == "US$0.99"
-        ups = [d for direction, d in swipes if direction == "up"]
-        downs = [d for direction, d in swipes if direction == "down"]
-        # 商品一出现就停: 只有少量快滑, 没有反向回找
-        assert 2 <= len(ups) <= 5 and all(d == 0.8 for d in ups)
+        # 精确坐标上滑: y1>y2(1800→400 ratio)
+        ups = [s for s in swipes if isinstance(s, tuple) and len(s) == 4
+               and s[1] > s[3]]
+        downs = [s for s in swipes if isinstance(s, tuple) and len(s) == 4
+                 and s[1] < s[3]]
+        # 商品一出现就停: 只有少量上滑, 没有反向回找
+        assert 2 <= len(ups) <= 5, f"上滑次数应在 2-5(实际 {len(ups)})"
         assert downs == []
         assert len(ocr_calls) == 2
 
@@ -1055,6 +1061,8 @@ class TestShopFastScrollToBottom:
         """列表钉底(内容稳定, 仅计时器跳动) → 判底停止 → 底部找到"""
         a = self._make()
         swipes = []
+        a.d.swipe = lambda x1, y1, x2, y2, duration=0.3: \
+            swipes.append((x1, y1, x2, y2))
         a.d.swipe_direction = lambda direction, distance=0.5: \
             swipes.append((direction, distance))
         # 截图恒定 → 容差判底触发, 阶段 1 提前结束
@@ -1066,9 +1074,11 @@ class TestShopFastScrollToBottom:
 
         assert info is not None and info.matched
         assert info.price == "US$0.99"
-        ups = [d for direction, d in swipes if direction == "up"]
-        downs = [d for direction, d in swipes if direction == "down"]
-        assert ups and all(d == 0.8 for d in ups)
-        assert len(ups) <= 3          # 判底后不再多滑
+        ups = [s for s in swipes if isinstance(s, tuple) and len(s) == 4
+               and s[1] > s[3]]
+        downs = [s for s in swipes if isinstance(s, tuple) and len(s) == 4
+                 and s[1] < s[3]]
+        assert ups, "必须有上滑"
+        assert len(ups) <= 3, f"判底后不再多滑(实际 {len(ups)} 次上滑)"
         # 底部起第 1 屏找到(阶段 2 第一次 OCR)
         assert len(ocr_calls) >= 2

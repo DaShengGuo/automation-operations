@@ -671,7 +671,15 @@ class PokemonGoAdapter(BaseGameAutomation):
         UNKNOWN 页仅当存在弹窗特征(短文本按钮候选)才允许 BACK。
         注册页检测失败(UNKNOWN)且无弹窗特征 → 拒绝 BACK, 交给
         注册页恢复流程, 绝不误退游戏。
+
+        商城滑动保护(规格§九 2026-08-21): shop_auto.scrolling 期间一律
+        拒绝 BACK — 滑动中状态可能短暂 UNKNOWN(Ocr 未识别商品文字),
+        此时按 BACK 会退出商城(客户「滑几次异常退出商城」疑似根因之一)。
         """
+        if getattr(self.shop_auto, "scrolling", False):
+            self.log.warning("[BACK守卫] 商城滑动中(scrolling=True) "
+                             "禁止 BACK — 防误退商城")
+            return False
         state = self.detect_state()
         if state in (PokemonGoState.RETURNING_PLAYER,
                      PokemonGoState.GAME_SPLASH, PokemonGoState.MAP,
