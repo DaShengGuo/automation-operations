@@ -28,18 +28,29 @@ class LogoutAutomation:
     # ── 进入设置 ──
 
     def open_main_menu(self, timeout: float = 20) -> bool:
-        """MAP → 点击底部 Poké Ball → MAIN_MENU。成功标准: MAIN_MENU 出现"""
+        """MAP → 点击底部 Poké Ball → MAIN_MENU。成功标准: MAIN_MENU 出现
+
+        规格 2026-08-21 §四: 点击后验证商城入口出现; 失败重试 ≤2 次,
+        不等待。模板常因渲染延迟失败 → 快速落比例坐标(0.5,0.94)。
+        """
         if self.detector.detect() == PokemonGoState.MAIN_MENU:
             return True
-        # 底部中央 Poké Ball(比例坐标 + 模板兜底)
-        ok = self.a.click_template(self.logout_cfg.get("ball_template"),
-                                   timeout=2)   # 模板常因渲染延迟失败, 快速落比例坐标
-        if not ok:
-            self.d.click_ratio(0.5, 0.94)
-            time.sleep(1.5)
-        state = self.detector.wait_for_state([PokemonGoState.MAIN_MENU],
-                                             timeout=timeout)
-        return state == PokemonGoState.MAIN_MENU
+        ball_tpl = self.logout_cfg.get("ball_template")
+        per_try = max(2.0, timeout / 2.0) if timeout else 4.0
+        for attempt in range(2):   # 规格: 最多 2 次
+            self.a.tick_heartbeat()
+            # 模板快试 0.5s(渲染延迟常失败), 失败立即比例坐标 — 不浪费 2s
+            ok = self.a.click_template(ball_tpl, timeout=0.5)
+            if not ok:
+                self.d.click_ratio(0.5, 0.94)
+            self.detector.bust_caches()
+            state = self.detector.wait_for_state(
+                [PokemonGoState.MAIN_MENU], timeout=per_try)
+            if state == PokemonGoState.MAIN_MENU:
+                return True
+            self.log.info(f"[退出] 点球后未进主菜单(当前={state.value}) "
+                          f"— 重试第 {attempt + 1}/2 次")
+        return False
 
     def go_settings(self, timeout: float = 30) -> bool:
         """MAIN_MENU → 点击設定 → SETTINGS。成功标准: SETTINGS 出现

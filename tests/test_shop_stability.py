@@ -504,3 +504,54 @@ def test_wait_home_rejects_transient_home(env, monkeypatch):
     assert adapter.wait_home(timeout=10) is True, \
         "转场瞬时 MAP 必须被二次确认否决, 之后真正稳定 MAP 才返回 True"
     assert calls["n"] >= 5, "必须经过瞬时命中→否决→稳定命中→二次确认全流程"
+
+
+# ── 11: 点球重试 ≤2 次(规格§四) —──────────────────────────────
+
+def test_open_main_menu_retries_on_failure(env, monkeypatch):
+    """点球后未进主菜单 → 重试 ≤2 次, 不无限等待。
+    模拟: 第1次点球后仍 MAP(点击未生效), 第2次才进 MAIN_MENU。
+    """
+    ctrl, adapter = env
+    ctrl.scene = "MAP"
+    ball_calls = {"n": 0}
+
+    def effect(x, y):
+        ball_calls["n"] += 1
+    ctrl.click_effect = effect
+    monkeypatch.setattr(adapter, "click_template", lambda *a, **k: False)
+    # 入口 detect 返回 MAP(不直接 return True); wait_for_state 第1次 MAP
+    # (点球1未生效), 第2次 MAIN_MENU(点球2生效)
+    monkeypatch.setattr(adapter.detector, "detect",
+                        lambda: PokemonGoState.MAP)
+    wfs_seq = {"n": 0}
+
+    def fake_wait(states, timeout=None, or_states=None):
+        wfs_seq["n"] += 1
+        return PokemonGoState.MAP if wfs_seq["n"] == 1 \
+            else PokemonGoState.MAIN_MENU
+    monkeypatch.setattr(adapter.detector, "wait_for_state", fake_wait)
+
+    assert adapter.logout_auto.open_main_menu(timeout=8) is True
+    assert ball_calls["n"] >= 2, "第1次未进菜单必须重试点球"
+
+
+def test_open_main_menu_gives_up_after_two_failures(env, monkeypatch):
+    """两次点球均未进主菜单 → 返回 False, 不第三次(规格: 最多 2 次)。"""
+    ctrl, adapter = env
+    ctrl.scene = "MAP"
+    ball_calls = {"n": 0}
+
+    def effect(x, y):
+        ball_calls["n"] += 1
+    ctrl.click_effect = effect
+    monkeypatch.setattr(adapter, "click_template", lambda *a, **k: False)
+    monkeypatch.setattr(adapter.detector, "detect",
+                        lambda: PokemonGoState.MAP)
+    monkeypatch.setattr(adapter.detector, "wait_for_state",
+                        lambda states, timeout=None, or_states=None:
+                            PokemonGoState.MAP)
+
+    assert adapter.logout_auto.open_main_menu(timeout=4) is False
+    assert ball_calls["n"] == 2, "最多点球 2 次, 不得无限重试"
+

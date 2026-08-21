@@ -259,6 +259,32 @@ class PokemonGoAdapter(BaseGameAutomation):
         self.detector.bust_caches()   # 强制下轮用最新截图重检
         return self.detector.detect() in home_states
 
+    def _wait_popup_gone(self, trigger_words, timeout: float = 2.0,
+                         interval: float = 0.4) -> bool:
+        """弹窗点击后等消失(规格 2026-08-21: 禁止盲 sleep, 改验证轮询)。
+
+        旧实现点击后 time.sleep(2) 睡满 — 弹窗已消失仍等, 累积延迟。
+        现在每 interval 秒重检 OCR, 触发词消失立即返回(True);
+        超时仍在返回 False(调用方按需截图留档)。trigger_words 为
+        该弹窗的稳定特征词(如 ["查看","天前"]), 消失即视为关闭成功。
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.tick_heartbeat()
+            self.detector.bust_caches()   # 点击后画面已变, 清 OCR 缓存
+            try:
+                joined = " ".join(t for t, _ in self.detector.ocr_boxes())
+            except Exception:
+                return True   # OCR 失败, 保守视为已消失(不卡流程)
+            if not any(w in joined for w in trigger_words):
+                return True
+            time.sleep(interval)
+        return False
+
+        time.sleep(gap)
+        self.detector.bust_caches()   # 强制下轮用最新截图重检
+        return self.detector.detect() in home_states
+
     def handle_popups(self) -> int:
         """处理弹窗(通用 PopupHandler + 公告弹窗 + 退出确认 + 首次流程)"""
         handled = super().handle_popups()
@@ -273,13 +299,13 @@ class PokemonGoAdapter(BaseGameAutomation):
         if "查看" in joined and "天前" in joined:
             self.log.info("[弹窗] 公告弹窗 — 点击外部区域关闭")
             self.d.click_ratio(0.5, 0.15)
-            time.sleep(2)
+            self._wait_popup_gone(["查看", "天前"])
             handled += 1
         # 游戏退出确认(真机: 「要結束Pokémon GO嗎? OK/取消」) → 点取消
         elif ("结束" in joined or "結束" in joined) and "取消" in joined:
             self.log.info("[弹窗] 退出确认 — 点击取消(留在游戏)")
             self.click_ocr_text(["取消", "Cancel"], timeout=5)
-            time.sleep(1.5)
+            self._wait_popup_gone(["结束", "結束"])
             handled += 1
         # 小米智能密码管理弹窗(真机: 登录后询问保存账号密码) → 点取消
         # (账号密码不入系统密码库, 业务密码仅存本地 runtime.db)
@@ -287,21 +313,21 @@ class PokemonGoAdapter(BaseGameAutomation):
               or "智能密码" in joined):
             self.log.info("[弹窗] 系统密码保存询问 — 点击取消(不保存)")
             self.click_ocr_text(["取消"], timeout=5)
-            time.sleep(1.5)
+            self._wait_popup_gone(["智能密码", "自动保存账号密码"])
             handled += 1
         # 週間大挑戰等活动任务弹窗(真机: 選擇小組/等等再說, 模态弹窗
         # 会吞掉精灵球点击, BACK 也关不掉) → 点「等等再說」跳过
         elif "等等再說" in joined or "等等再说" in joined:
             self.log.info("[弹窗] 活动任务弹窗 — 点击「等等再說」跳过")
             self.click_ocr_text(["等等再說", "等等再说"], timeout=5)
-            time.sleep(2)
+            self._wait_popup_gone(["等等再說", "等等再说"])
             handled += 1
         # 首次登录安全提示(真机: 注意周遭環境/請勿進入危險的地區/OK) → 点 OK
         elif "OK" in joined and ("周遭" in joined or "危險" in joined
                                  or "危险" in joined):
             self.log.info("[弹窗] 安全提示 — 点击 OK")
             self.click_ocr_text(["OK"], timeout=5)
-            time.sleep(2)
+            self._wait_popup_gone(["周遭", "危險", "危险"])
             handled += 1
         # 无法登入弹窗(真机: 遊戲記住上次失敗會話 — 無法登入/再試一次/
         # 以其他帳號登入)。注意: 弹窗描述含「中央站」, 只能在本分支
@@ -312,13 +338,13 @@ class PokemonGoAdapter(BaseGameAutomation):
                                        require_all=True):
                 self.click_ocr_text(["其他", "账号"], timeout=5,
                                     require_all=True)
-            time.sleep(2)
+            self._wait_popup_gone(["無法登入", "无法登入"])
             handled += 1
         # 游戏认证失败提示(真机: 無法進行認證...OK) → 点 OK 回登录入口
         elif "認證" in joined and "OK" in joined:
             self.log.info("[弹窗] 认证失败提示 — 点击 OK(回登录入口)")
             self.click_ocr_text(["OK"], timeout=5)
-            time.sleep(2)
+            self._wait_popup_gone(["認證", "认证"])
             handled += 1
         if self.detector.detect() in (PokemonGoState.INITIAL_PROMPT,
                                       PokemonGoState.WELCOME_PAGE):

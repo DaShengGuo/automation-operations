@@ -5,6 +5,32 @@
 
 ---
 
+## v1.2.7 — GUI 实时日志不显示根因 + 弹窗即关 + 点球重试 (2026-08-21)
+
+三块独立修复(用户规格 v3):
+
+1. **GUI 实时日志空白根因(规格§五重点, 证据链闭合)**:
+   `desktop/app.py` 旧时序先挂 `QtLogHandler` 到 root logger, 再建
+   `DesktopAppController` — 其 `__init__` 调 `setup_logging()`, 内部
+   `root.handlers.clear()` 把刚挂的 QtLogHandler 清掉。之后日志只进
+   控制台/文件, GUI 日志区永远空白(`console=False` 打包后控制台也
+   看不见)。文件日志正常反证断点在 QtLogHandler 被清。
+   修复双保险: ① app.py 调整顺序(先 controller 后挂 handler);
+   ② logger.py clear 前保留类型名 == QtLogHandler 的外部 handler
+   (防未来时序回归, 按类型名判断避免 core→desktop 依赖)。
+   + 回归测试 test_setup_logging_preserves_qt_log_handler(模拟旧时序)。
+2. **弹窗即关不睡满(规格§一/§二)**: handle_popups 各分支点击后旧
+   盲 `sleep(1.5~2)` 睡满 — 弹窗已消失仍等, 累积延迟。改为
+   `_wait_popup_gone(trigger_words)`: 0.4s 间隔验证轮询(每轮 bust_caches
+   清 OCR 缓存读最新画面), 触发词消失立即返回, 最多 2s。命中弹窗
+   通常 1 次确认即消失(0.4s), 比旧 sleep(2) 快 1.6s。
+3. **点球重试 ≤2(规格§四)**: open_main_menu 旧单次点击无重试, 模板
+   timeout=2s 浪费(渲染延迟常失败)。改模板快试 0.5s 失败立即比例
+   坐标 + wait_for_state MAIN_MENU 失败重试 1 次, 最多 2 次不无限等。
+   + 回归测试 2 条(重试成功 / 两次失败放弃)。
+
+- **测试**: 全量 363 条通过(+1 日志 +2 点球)。
+
 ## v1.2.6 — 快速连续滑动恢复 + 全流程等待节点压缩 (2026-08-21)
 
 用户规格 v2「保持快速连续滑动逻辑, 不要一次滑动一次确认」+ 全流程
