@@ -275,18 +275,24 @@ class ShopAutomation:
                     self.log.error("[ERROR] 商城滑动过程中真退出已确认")
                     self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
                     return None
-            self.log.info(f"[SHOP] 开始大幅滑动 {i + 1}/{count}")
+            self.log.info(f"[SHOP] 执行滑动 {i + 1}/{count}")
             self._do_swipe(swipe_x, y1, y2, duration=1.0)
             time.sleep(0.5)   # 触摸间隔(duration 1.0s 后让滚动停下), 不判底
         return None
 
     def _do_swipe(self, x: int, y1: int, y2: int, duration: float = 1.0):
-        """执行一次精确坐标上滑(规格 2026-08-21 §五: duration 800-1200ms)。
-        异常吞掉(滑动失败由调用方结果兜底)。"""
+        """执行一次精确坐标上滑(规格 2026-08-21 §十: duration ~1000ms)。
+
+        异常不再静默(旧 debug 吞掉导致「日志显示滑动执行但页面不动」
+        无法取证): 失败时 warning 日志 + 截图留档, 供离线排查坐标/
+        触摸通道问题。
+        """
         try:
             self.d.swipe(x, y1, x, y2, duration=duration)
         except Exception as e:
-            self.log.debug(f"[SHOP] swipe 异常: {e}")
+            self.log.warning(f"[SHOP] swipe 异常(坐标 "
+                             f"({x},{y1})→({x},{y2})): {e} — 截图留档")
+            self.a.capture_keyframe("SWIPE_ERROR")
 
     def find_product(self, max_scroll: int = 12) -> Optional[ProductInfo]:
         """定数滑动找商品(规格 2026-08-21 §四~§八重写)。
@@ -314,14 +320,22 @@ class ShopAutomation:
         first_pass = int(self.shop_cfg.get("scroll_first_pass", 6))
         second_pass = int(self.shop_cfg.get("scroll_second_pass", 3))
         self.log.info(f"[SHOP] 开始大幅滑动 {first_pass} 次")
-        # 滑动参数(规格 2026-08-21 §五): 进一步增大距离 — start_y=2200,
-        # end_y=200, duration 0.8~1.2s(取 1.0)。每次滑动覆盖更长距离,
-        # 6 次覆盖列表全程。
-        sw = max(1, getattr(self.d, "screen_w", 1080))
-        sh = max(1, getattr(self.d, "screen_h", 2400))
-        swipe_x = sw // 2
-        swipe_y1 = int(sh * 0.917)  # 2200(基准 2400)
-        swipe_y2 = int(sh * 0.083)  # 200(基准 2400)
+        # 滑动参数(规格 2026-08-21 §八~§十): 坐标必须走 CoordinateMapper —
+        # 与 click_ratio 同一体系(含安全区 clamp, 防底部手势区截获触摸)。
+        # 旧实现直接用 screen_h 比例换算: 真机分辨率/稳定边距(insets)不同
+        # 时坐标可能落入系统手势区或超屏 → swipe 静默失效(「日志显示滑动
+        # 执行但页面不动」根因)。基准 1080×2400: 中心 x=540, y=2200→200。
+        mapper = getattr(self.d, "mapper", None)
+        if mapper is not None:
+            swipe_x = mapper.map_ratio(0.5, 0.5)[0]
+            swipe_y1 = mapper.map(540, 2200)[1]
+            swipe_y2 = mapper.map(540, 200)[1]
+        else:
+            sw = max(1, getattr(self.d, "screen_w", 1080))
+            sh = max(1, getattr(self.d, "screen_h", 2400))
+            swipe_x = sw // 2
+            swipe_y1 = int(sh * 0.917)  # 2200(基准 2400)
+            swipe_y2 = int(sh * 0.083)  # 200(基准 2400)
         try:
             # ── 第一阶段: 完整大幅滑动 first_pass 次(期间禁止识别) ──
             self._scroll_pass(first_pass, swipe_x, swipe_y1, swipe_y2,

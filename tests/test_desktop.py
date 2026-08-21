@@ -217,6 +217,19 @@ class TestController:
         assert not result["ok"]
         c.shutdown()
 
+    def test_start_without_accounts_rejected_sync(self, tmp_data):
+        """规格 2026-08-21 §一: start() 第一步同步检查账号 —
+        无账号立即返回 error(不切 STARTING/不建 Worker)。"""
+        c = self._make_controller(tmp_data)
+        from desktop.runtime_state import ApplicationRunState
+        result = c.start()
+        assert not result["ok"], "无账号必须拒绝启动"
+        assert "没有可执行账号" in result["error"]
+        assert c.state == ApplicationRunState.STOPPED, \
+            "拒绝启动时不得切 STARTING"
+        assert c.scheduler is None, "不得创建调度器/Worker"
+        c.shutdown()
+
     def test_start_without_accounts_blocked(self, tmp_data):
         """规格 2026-08-21 §七: 队列模式无账号可执行 → 禁止启动 Worker,
         弹窗提示「当前没有可执行账号」, 状态回到 STOPPED。"""

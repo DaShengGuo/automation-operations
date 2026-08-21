@@ -448,12 +448,27 @@ class DesktopAppController:
         return self._start_scheduler()
 
     def start(self) -> dict:
-        """开始运行(STOPPED → RUNNING)。不重新保存配置。"""
+        """开始运行(STOPPED → RUNNING)。不重新保存配置。
+
+        规格 2026-08-21 §一/§二: 第一步同步检查账号队列 — 无账号可
+        执行时立即拒绝(GUI 弹窗), 绝不进入 STARTING/创建 Worker。
+        """
         if self._state == ApplicationRunState.RUNNING:
             return {"ok": True, "detail": "already running"}
         if self._state in (ApplicationRunState.STARTING,
                            ApplicationRunState.STOPPING):
             return {"ok": False, "error": "正在切换状态, 请稍候"}
+        # 启动前账号检查(同步, 在状态切换前 — 规格: 无账号禁止启动)
+        if self.cfg.account_provider in ("manual_queue", ""):
+            totals = self.queue_manager.totals()
+            n = totals["waiting"] + totals["running"]
+            logger.info(f"[START] 读取账号列表 — 账号数量: {n}")
+            if n == 0:
+                logger.info("[START] 无账号可执行, 禁止启动")
+                return {"ok": False,
+                        "error": "当前没有可执行账号\n请先添加账号密码"}
+        logger.info(f"[START] 发现账号数量: "
+                    f"{self.queue_manager.pending_total()} — 开始启动")
         return self._start_scheduler()
 
     def _start_scheduler(self) -> dict:

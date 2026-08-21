@@ -25,11 +25,14 @@ logger = logging.getLogger(__name__)
 FAST_INTERVAL = 5.0     # 连接状态热插拔检测周期(秒)
 IDLE_FULL_INTERVAL = 60.0    # 空闲时硬件信息全量刷新周期(秒)
 RUNNING_FULL_INTERVAL = 300.0  # 运行中硬件信息刷新周期(秒, 不干扰自动化)
-VPN_CHECK_INTERVAL = 120.0  # 每设备 VPN 在线检测周期(秒, 状态变化才提醒)
 
 
 class DeviceMonitor:
-    """设备热插拔监控(守护线程)。"""
+    """设备热插拔监控(守护线程)。
+
+    VPN 检测不在此执行(规格 2026-08-21 §七): 只在 GUI 点击启动时
+    由 preflight_vpn 执行一次, 运行期间禁止周期检测。
+    """
 
     def __init__(self, registry: DeviceRegistry, bus=None,
                  device_manager=None, adb_locator: AdbLocator | None = None):
@@ -41,9 +44,6 @@ class DeviceMonitor:
         self._thread: threading.Thread | None = None
         self._last_full = 0.0
         self._last_state_key = ""
-        # VPN 检测节流 + 状态(每设备): 状态变化才发 bus 提醒
-        self._next_vpn_check: dict[str, float] = {}
-        self._vpn_ok: dict[str, bool] = {}
         # 运行中判断回调(避免导入循环): controller 注入
         self.is_running = lambda: False
 
@@ -91,15 +91,10 @@ class DeviceMonitor:
             self._refresh_hardware()
             self._last_full = time.time()
 
-        # 4. VPN 在线检测(每设备节流 120s; 状态变化才提醒 GUI)
-        now = time.time()
-        for r in self.registry.records():
-            if not r.is_connected:
-                continue
-            if now < self._next_vpn_check.get(r.serial, 0.0):
-                continue
-            self._next_vpn_check[r.serial] = now + VPN_CHECK_INTERVAL
-            self._check_vpn(r.serial)
+        # 4. VPN 检测(规格 2026-08-21 §七): 只在 GUI 点击启动时
+        #    执行一次(preflight_vpn), 运行期间禁止周期调用 —
+        #    客户反馈运行中反复检测干扰流程。周期检测已删除,
+        #    运行期间 VPN 状态不主动提醒。
 
         # 5. 变化通知 GUI
         state_key = self._state_key()
@@ -136,25 +131,6 @@ class DeviceMonitor:
                     f"ADB 正常 {d.brand} {d.model} {d.resolution}")
             else:
                 self.registry.mark_ready(d.serial, False, d.init_error)
-
-    def _check_vpn(self, serial: str) -> None:
-        """检测单台设备 VPN; 缺失时(首次/由开转关)经 bus 提醒 GUI 弹窗。"""
-        try:
-            from desktop.vpn_check import check_vpn
-            ok, detail = check_vpn(self.locator.path, serial)
-        except Exception as e:
-            logger.debug("[VPN] 检测异常 %s: %s", serial, e)
-            return
-        prev = self._vpn_ok.get(serial)
-        self._vpn_ok[serial] = ok
-        logger.info("[VPN] 设备 %s VPN=%s (%s)", serial,
-                    "在线" if ok else "未检测到", detail)
-        if not ok and prev is not False:
-            # 首次检测缺失(prev=None) / 由开转关(prev=True) → 弹窗提醒;
-            # 已知缺失(prev=False)不重复弹窗。注意必须用 `is` 判身份:
-            # 若写成 `prev is not True`, False is not True 恒真 → 每轮重复弹。
-            if self.bus is not None:
-                self.bus.vpn_warning.emit(serial, detail)
 
     def _state_key(self) -> str:
         return ",".join(

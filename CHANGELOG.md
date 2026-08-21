@@ -5,6 +5,36 @@
 
 ---
 
+## v1.3.2 — 启动拦截同步化 + VPN 只检一次 + 滑动坐标走映射器 (2026-08-21)
+
+规格「账号检查未拦截启动」「滑动日志执行但页面不动」:
+
+1. **启动账号检查同步化(规格§一/§二重点)**: 检查从后台线程
+   `_start_scheduler_worker` 提前到 `controller.start()` 同步第一步 —
+   无账号可执行(等待+运行中=0)立即返回 error「当前没有可执行账号,
+   请先添加账号密码」(GUI QMessageBox 弹窗), 状态保持 STOPPED,
+   不创建调度器/Worker/线程/不控制手机。日志 [START] 读取账号列表
+   — 账号数量: N / 发现账号数量: N — 开始启动。后台线程内检查
+   保留作双保险。
+2. **VPN 只启动检测一次(规格§七)**: 删除 device_monitor 的 120s
+   周期 VPN 检测(_check_vpn/相关状态字段), 运行期间不再触发 VPN
+   检测/弹窗。VPN 只在 GUI 点击启动时由 preflight_vpn 执行一次。
+   vpn_check 核心函数保留(启动预检仍用)。
+3. **滑动坐标走 CoordinateMapper(规格§八~§十)**: 商城滑动坐标从
+   `screen_h 比例换算` 改为 mapper.map/map_ratio — 与 click_ratio
+   同一坐标体系(含安全区 clamp)。旧裸换算在真机分辨率/稳定边距
+   不同时坐标可能落入底部系统手势区或超屏 → 触摸被系统截获 →
+   「日志显示滑动执行但页面不动」根因。swipe 异常不再静默(旧
+   debug 吞掉无法取证): 改 warning + SWIPE_ERROR 截图留档。
+   日志 [SHOP] 执行滑动 N/6。
+4. **状态机确认(规格§三~§六)**: v1.3.1 已收紧 HANDLE_POPUPS 3s/
+   EXECUTE_TASK 90s(config.yaml, state_timeout 映射 handle_popups→
+   popup/execute_task→task 已核实生效); 商城流程状态锁 SHOP_SCROLLING
+   + 四条件退出证据 + 无自动重进已在 v1.3.0 落地, 本轮无重复改动。
+
+- **测试**: +1 start() 同步拒绝(不切 STARTING/不建调度器)。
+  全量 371 条通过。
+
 ## v1.3.1 — 流程提速 + 滑动加长 + 商品点击重试 + 启动账号检查 (2026-08-21)
 
 规格六项(删状态等待/滑动幅度/点击验证/启动检查):
