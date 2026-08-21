@@ -103,9 +103,10 @@ class PokemonGoAdapter(BaseGameAutomation):
             self.log.info(f"[launch] 已在 {state.value}, 无需重启")
             return True
         if self.d.is_app_running():
-            # 游戏进程在跑但不在已知页面 → 拉前台(不 force-stop)
+            # 游戏进程在跑但不在已知页面 → 拉前台(不 force-stop)。
+            # 不固定 sleep: wait_for_state 本身就是 0.2s 快速轮询,
+            # 进程在前台后第一个 tick 命中即返回(规格: 加载完成立即继续)。
             self.d.app_start(self.package, self.activity)
-            time.sleep(2)
         else:
             self.d.app_start(self.package, self.activity)
         state = self.detector.wait_for_state(
@@ -173,35 +174,73 @@ class PokemonGoAdapter(BaseGameAutomation):
     def wait_home(self, timeout: float = None) -> bool:
         """登录后等待进入主界面: MAP / 首次流程页面(§二, 步级预算 home_wait)。
 
+        智能页面检测等待(规格: 禁止固定几十秒 sleep):
+          - 前 3s 快速轮询(0.5s), 页面一出现立即返回;
+          - 之后降频(2s)减少 OCR 空转;
+          - 每 5s 打一次检查点进度日志([步骤] 第N次检测 已等Xs state=...);
+          - MAP 命中后做二次确认(隔 0.8s 再检一次), 两次都 MAP/首次流程页
+            才算真正进入 — 防转场动画/黑屏瞬时误判(规格: 多特征评分防误判)。
         循环内主动处理公告弹窗(弹窗遮挡 MAP 时不必等超时进 RECOVERY)。
         单轮超预算: 截图保存 + 记录日志 + 重启APP(暖启动保会话)重新
         进入, 再来一轮; 仍失败返回 False 交 Worker 恢复 — 绝不无限卡住
         (真机: WAIT_HOME 曾干等 38s 无动作)。
         """
-        timeout = timeout or self._step_budget("home_wait", 20)
+        timeout = timeout or self._step_budget("home_wait", 30)
         rounds = max(1, int(self._step_budget("home_rounds", 2)))
+        home_states = (PokemonGoState.MAP,
+                       PokemonGoState.INITIAL_PROMPT,
+                       PokemonGoState.WELCOME_PAGE,
+                       PokemonGoState.PROFESSOR_DIALOG)
         for rnd in range(1, rounds + 1):
-            deadline = time.time() + timeout
+            t0 = time.time()
+            deadline = t0 + timeout
+            checks = 0
+            last_log_at = -1.0
             while time.time() < deadline:
+                self.tick_heartbeat()
                 state = self.detector.detect()
-                if state in (PokemonGoState.MAP,
-                             PokemonGoState.INITIAL_PROMPT,
-                             PokemonGoState.WELCOME_PAGE,
-                             PokemonGoState.PROFESSOR_DIALOG):
-                    self.log.info(f"[步骤] 检测主页成功 "
-                                  f"(state={state.value}, 第{rnd}轮)")
-                    self._mark_trace("MAP_FOUND")
-                    return True
+                checks += 1
+                elapsed = time.time() - t0
+                # 检查点进度日志: 首次 + 每 5s 一次(规格: 详细日志可追节奏)
+                if checks == 1 or elapsed - last_log_at >= 5.0:
+                    self.log.info(f"[步骤] 第{checks}次检测主页 "
+                                  f"(已等{elapsed:.0f}s, "
+                                  f"state={state.value}, 第{rnd}轮)")
+                    last_log_at = elapsed
+                if state in home_states:
+                    # 二次确认: 防转场动画/黑屏瞬时误判(规格多特征评分)
+                    if self._confirm_home(home_states):
+                        self.log.info(f"[步骤] 检测主页成功 "
+                                      f"(state={state.value}, "
+                                      f"第{checks}次检测, 第{rnd}轮)")
+                        self._mark_trace("MAP_FOUND")
+                        return True
+                    self.log.debug(f"[WAIT_HOME] 首次命中 {state.value} "
+                                   f"但二次确认失败(转场/动画), 继续等待")
                 self.handle_popups()  # 公告/首次弹窗(内部 OCR 走缓存)
-                time.sleep(2)
+                # 前 3s 快速轮询, 之后降频(规格: 加载完成立即继续)
+                iv = 0.5 if (deadline - time.time()) > (timeout - 3.0) else 2.0
+                time.sleep(iv)
             # 超预算(§五): 截图保存 + 记录日志 + 重启APP 重新进入
             self.capture_keyframe("HOME_TIMEOUT")
-            self.log.warning(f"[WAIT_HOME] 等待主页面超时({timeout}s 预算) "
-                             f"— 截图留档, 重启APP 重新进入 "
+            self.log.warning(f"[WAIT_HOME] 等待主页面超时({timeout}s 预算, "
+                             f"{checks}次检测) — 截图留档, 重启APP 重新进入 "
                              f"(第{rnd}/{rounds}轮)")
             if rnd < rounds:
                 self.launch()   # 智能启动: 已在地图不重启, 未知页拉前台
         return False
+
+    def _confirm_home(self, home_states, gap: float = 0.8) -> bool:
+        """主页二次确认(规格: 多特征评分防加载动画/黑屏误判)。
+
+        首次命中主页状态后, 隔 gap 秒再检测一次:
+          - 两次都是主页状态 → 真正进入, 返回 True;
+          - 第二次变 UNKNOWN/其它 → 视为转场动画/瞬时误判, 返回 False。
+        gap 取 0.8s: 转场动画通常 <0.5s, 真正加载完成的页面稳定保持。
+        """
+        time.sleep(gap)
+        self.detector.bust_caches()   # 强制下轮用最新截图重检
+        return self.detector.detect() in home_states
 
     def handle_popups(self) -> int:
         """处理弹窗(通用 PopupHandler + 公告弹窗 + 退出确认 + 首次流程)"""

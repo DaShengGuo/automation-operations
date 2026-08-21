@@ -9,12 +9,13 @@ version.py
   v1.1.0  增加新功能
   v1.2.0  账号来源改为人工按设备输入账号密码队列
   v1.2.1  商城流程稳定性整改(状态缓存指纹碰撞/进店即滑/异常退出重进)
+  v1.2.2  启动等待智能化(快速轮询分层/检查点日志/MAP二次确认防转场误判)
   v2.0.0  重大架构升级
 """
 
 APP_NAME = "宝可梦自动化购买脚本"
 APP_NAME_EN = "PokemonAutomation"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 APP_VERSION_TAG = f"v{APP_VERSION}"
 APP_TITLE = "欢迎使用宝可梦自动化购买脚本"
 APP_PUBLISHER = "PokemonAutomation"

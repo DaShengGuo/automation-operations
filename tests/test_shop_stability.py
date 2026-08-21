@@ -195,9 +195,11 @@ def test_wait_home_timeout_reenters(env, monkeypatch):
 
     def fake_detect():
         calls["n"] += 1
-        if calls["n"] <= 1:
+        # 第一轮(timeout=1s, 快速轮询约 2 次检测)全程 UNKNOWN;
+        # 第二轮(暖启动后)MAP, 且二次确认也 MAP(≥4 次仍 MAP)
+        if calls["n"] <= 2:
             return PokemonGoState.UNKNOWN     # 第一轮: 卡在加载/未知页
-        return PokemonGoState.MAP             # 第二轮: 主页出现
+        return PokemonGoState.MAP             # 第二轮: 主页出现 + 二次确认
     monkeypatch.setattr(adapter.detector, "detect", fake_detect)
     monkeypatch.setattr(adapter, "handle_popups", lambda: 0)
 
@@ -333,3 +335,35 @@ def test_worker_wait_home_two_failures_enter_recovery(tmp_path, monkeypatch):
 
     assert len(recoveries) == 1, \
         "连续两轮 wait_home 失败必须立即交 RECOVERY, 不烧满 fsm 预算"
+
+
+# ── 11: wait_home MAP 二次确认防转场动画瞬时误判 ─────────────────
+
+def test_wait_home_rejects_transient_home(env, monkeypatch):
+    """转场动画/黑屏瞬时命中 MAP 但下一帧消失 → 不得判为已进主页。
+
+    规格: 多特征评分机制, 满足多个条件才算进入, 避免加载动画/黑屏误判。
+    二次确认: 首次命中 home_state 后隔 0.8s 再检, 两次都是主页状态才算。
+    """
+    ctrl, adapter = env
+    calls = {"n": 0}
+
+    def fake_detect():
+        calls["n"] += 1
+        # 第1次: 加载中 UNKNOWN; 第2次: 转场动画瞬时闪到 MAP;
+        # 第3次(二次确认): 动画结束回到 UNKNOWN → 否决, 继续等;
+        # 第4次起: 真正稳定 MAP + 二次确认也 MAP
+        if calls["n"] == 1:
+            return PokemonGoState.UNKNOWN
+        if calls["n"] == 2:
+            return PokemonGoState.MAP       # 瞬时误判
+        if calls["n"] == 3:
+            return PokemonGoState.UNKNOWN   # 二次确认否决
+        return PokemonGoState.MAP           # 真正进入
+    monkeypatch.setattr(adapter.detector, "detect", fake_detect)
+    monkeypatch.setattr(adapter, "handle_popups", lambda: 0)
+    monkeypatch.setattr(adapter, "launch", lambda: True)
+
+    assert adapter.wait_home(timeout=10) is True, \
+        "转场瞬时 MAP 必须被二次确认否决, 之后真正稳定 MAP 才返回 True"
+    assert calls["n"] >= 5, "必须经过瞬时命中→否决→稳定命中→二次确认全流程"
