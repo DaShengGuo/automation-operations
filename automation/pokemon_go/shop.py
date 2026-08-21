@@ -197,18 +197,33 @@ class ShopAutomation:
     # ── 滚动寻找商品 ──
 
     def _shop_still_open(self) -> bool:
-        """商城流程中页面仍在商店内(§四)。
+        """商城流程中页面仍在商店内(§四)。防误判退出(规格§七 2026-08-21)。
 
-        检测到首页 UI/主菜单/设置/登出确认 = 商城已异常退出 → False。
+        检测到首页 UI/主菜单/设置/登出确认 = 疑似商城异常退出。
+        但 OCR/模板检测可能瞬时误判(滑动动画帧) — 单次 MAP 绝不直接判退出。
+        规格§七: 连续两次确认 MAP 且商城特征消失, 才认为真退出。
+
         UNKNOWN 视为转场/加载容忍(商店 OCR 未识别的中间态)。
         """
+        exit_states = (PokemonGoState.MAIN_MENU, PokemonGoState.MAP,
+                       PokemonGoState.SETTINGS, PokemonGoState.LOGOUT_CONFIRM)
         state = self.detector.detect()
-        if state in (PokemonGoState.MAIN_MENU, PokemonGoState.MAP,
-                     PokemonGoState.SETTINGS,
-                     PokemonGoState.LOGOUT_CONFIRM):
-            self.log.warning(f"[商店] 检测到商城外页面: {state.value} "
-                             f"— 商城异常退出")
+        if state not in exit_states:
+            return True
+        # 疑似退出 — 二次确认(规格§七): 短等 + bust_caches 强制最新画面重检。
+        # 滑动动画帧可能瞬时误判 MAP, 确认仍 MAP 且非 SHOP 才算真退出。
+        self.log.warning(f"[SHOP] 疑似商城退出(检测到 {state.value}) "
+                         f"— 二次确认中")
+        time.sleep(0.6)   # 等滑动动画停下(规格: 不 sleep 几十秒, 仅动画缓冲)
+        self.detector.bust_caches()
+        confirm = self.detector.detect()
+        if confirm in exit_states and confirm != PokemonGoState.SHOP:
+            self.log.warning(f"[商店] 商城异常退出已确认(两次检测均为 "
+                             f"{confirm.value}) — 触发恢复")
             return False
+        # 二次确认回 SHOP/UNKNOWN → 上次是瞬时误判, 继续滑动
+        self.log.info(f"[SHOP] 二次确认回 {confirm.value} — 瞬时误判, "
+                      f"继续滑动(不退出商城)")
         return True
 
     # ── 滑动循环辅助(规格 2026-08-21 定数滑动) ──
@@ -218,18 +233,21 @@ class ShopAutomation:
                      ) -> Optional[ProductInfo]:
         """连续滑动 count 次(规格§五/§六/§七)。
 
+        规格§五核心: 第一阶段必须完整滑动 6 次, 期间禁止识别商品
+        (禁止"第2次滑动后识别"/提前进入补滑)。本方法纯滑动不识别 —
+        商品识别由调用方在滑动完成后统一做。
         - 单次滑动 duration 0.7s, 间隔 0.4s(规格§七: 600-800ms / 300-500ms);
-        - 商品快检穿插(每 2 轮, 商品出现立即停, 不滑过头);
         - 静帧判底(连续 2 帧无变化)提前停 — 到底优化, 非回滚;
-        - 滑动中异常退出守卫(kicked_out);
+        - 滑动中异常退出守卫(kicked_out, 每 2 轮) — 保留但不识别商品;
         - 超预算停。
-        返回 ProductInfo(商品命中)或 None(未命中/到底/超预算/异常退出)。
+        返回 None(滑动完成/到底/超预算/异常退出 — 不返回商品)。
         """
         last_still = None
         stale_count = 0
         for i in range(count):
             self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
-            # 商品快检(每 2 轮): 商品出现立即停, 不滑过头
+            # 异常退出守卫(每 2 轮): 商城被踢出立即停止滑动。
+            # 不识别商品(规格§五: 滑动期间禁止识别, 滑完才统一识别)。
             if i >= 2 and i % 2 == 0:
                 if not self._shop_still_open():
                     self.kicked_out = True
@@ -237,12 +255,6 @@ class ShopAutomation:
                                    f"(当前状态={self.detector.detect().value})")
                     self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
                     return None
-                info = self._detect_product(target_amount)
-                if info and info.matched:
-                    self.log.info(f"[SHOP] 滑动中识别到目标商品: {info.name} "
-                                  f"({info.price}) (第 {i + 1} 次)")
-                    self.a._mark_trace("PACKAGE_FOUND")
-                    return info
             if time.time() - t0 > budget:
                 self.log.warning(f"[SHOP] 滑动超预算({budget}s) — 停止滑动")
                 self.a.capture_keyframe("SHOP_SCROLL_BUDGET_EXCEEDED")

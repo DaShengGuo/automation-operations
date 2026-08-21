@@ -69,7 +69,7 @@ class TestAllImports:
                           coordinate, device_manager, device_worker,
                           exceptions, image_matcher, logger, ocr, perf,
                           popup_handler, qq_provider, state_machine,
-                          task_scheduler, ui_detector, watchdog)
+                          stop_error, task_scheduler, ui_detector, watchdog)
         from models import account, device, page_state, task
         from storage import database, repositories
         from automation import base_game, target_game
@@ -333,6 +333,48 @@ class TestWorkerPipeline:
         time.sleep(0.02)
         w.automation.web.heartbeat_cb()          # 回调应刷新心跳时间戳
         assert w.last_action_ts >= before
+
+    def test_stop_event_interrupts_via_heartbeat(self, tmp_cfg, repos):
+        """停止按钮失效修复(2026-08-21): tick_heartbeat 检测到 stop_event
+        置位 → 抛 WorkerStopRequested(BaseException) 协作式中断,
+        不再等当前账号流程跑完才停(客户实测: 点停止后手机仍继续点击)。"""
+        from core.stop_error import WorkerStopRequested
+        accounts, results = repos
+        accounts.add("user001", "p")
+
+        w, stop = make_worker("FAKE-STOP", tmp_cfg, accounts, results)
+        for _ in range(10):
+            w._tick()
+            if w.automation is not None:
+                break
+        assert w.automation is not None
+        # Worker 必须注入 stop_cb(与 heartbeat_cb 同一链路)
+        assert callable(getattr(w.automation, "stop_cb", None)), \
+            "Worker 必须为自动化层注入 stop_cb"
+        # 停止前: stop_cb 返回 False
+        assert w.automation.stop_cb() is False
+        # 停止后: stop_cb 返回 True(adapter.tick_heartbeat 据此抛中断)
+        stop.set()
+        assert w.automation.stop_cb() is True
+
+    def test_worker_stop_requested_not_swallowed_by_except_exception(
+            self, tmp_cfg, repos):
+        """WorkerStopRequested 继承 BaseException — 穿透各层 `except Exception`
+        不被吞进错误恢复(若继承 Exception 会被 worker/automation 的
+        except Exception 捕获, 转入 _recover_with_watchdog 掩盖停止意图)。
+        断言类层级 + run() 顶层有专门捕获分支。"""
+        from core.stop_error import WorkerStopRequested
+        # 类层级: 不被 except Exception 捕获, 但可被显式捕获
+        assert issubclass(WorkerStopRequested, BaseException)
+        assert not issubclass(WorkerStopRequested, Exception)
+        # run() 顶层捕获分支存在(源码级验证停止路径不被 except Exception 吞)
+        import inspect
+        import core.device_worker as dw
+        src = inspect.getsource(dw.DeviceWorker.run)
+        assert "except WorkerStopRequested" in src, \
+            "run() 必须有专门的 WorkerStopRequested 捕获分支安静退出"
+        assert "except Exception" in src, \
+            "run() 保留通用异常恢复分支"
 
     def test_run_defaults_to_pokemon_go(self, tmp_cfg, repos):
         """回归: 裸 `python main.py run` 必须加载 pokemon_go 而不是旧

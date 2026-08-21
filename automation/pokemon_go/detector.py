@@ -335,7 +335,16 @@ class PokemonGoPageDetector:
 
         真机 run 实测: 登录等待 120s 期间心跳停摆, 调度器误判
         WORKER_STALLED 重建 Worker, 登录重试被打断 + 账号白冷却 2 分钟。
+
+        2026-08-21 停止按钮失效修复: 同时检查 stop_cb(Worker 注入)。
+        stop_event 置位 → 抛 WorkerStopRequested(BaseException) 协作式
+        中断 — wait_for_state/wait_external_context 等长轮询路径也能
+        1 秒内响应停止(不止 adapter.tick_heartbeat 路径)。
         """
+        stop_cb = getattr(self, "stop_cb", None)
+        if stop_cb and stop_cb():
+            from core.stop_error import WorkerStopRequested
+            raise WorkerStopRequested("停止指令生效, 中断检测轮询")
         cb = getattr(self, "heartbeat_cb", None)
         if cb:
             cb()

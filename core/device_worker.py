@@ -21,6 +21,7 @@ from core.exceptions import (AdbError, SelectorNotConfiguredError,
                              UiAutomatorError)
 from core.logger import ContextLogger, get_logger, mask_account
 from core.state_machine import WorkerState, WorkerStateMachine
+from core.stop_error import WorkerStopRequested
 from core.watchdog import AnomalyType, Watchdog
 from models.account import Account, AccountStatus
 from models.device import DeviceStatus
@@ -147,6 +148,10 @@ class DeviceWorker(threading.Thread):
                     self._tick()
                 except (KeyboardInterrupt, SystemExit):
                     raise
+                except WorkerStopRequested:
+                    # 停止指令生效 — 协作式中断, 安静退出(finally 归还账号)
+                    self.log.warning("[STOP] 收到停止指令 — 设备任务已停止")
+                    break
                 except SelectorNotConfiguredError as e:
                     self._fail_account_immediately(str(e))
                 except (AdbError, UiAutomatorError) as e:
@@ -676,11 +681,18 @@ class DeviceWorker(threading.Thread):
             if self._tracer is not None:
                 self._tracer.mark(event)
 
+        # 停止检查回调(2026-08-21 停止按钮失效修复): tick_heartbeat 每轮
+        # 检查, stop_event 置位即抛 WorkerStopRequested 协作式中断 —
+        # 长任务(execute_task/login)不再无视停止指令继续控制手机。
+        stop_cb = lambda: (self.stop_event.is_set()
+                           or self._local_stop.is_set())
+
         for obj in (self.automation,
                     getattr(self.automation, "web", None),
                     getattr(self.automation, "detector", None)):
             if obj is not None:
                 obj.heartbeat_cb = cb
+                obj.stop_cb = stop_cb
                 if hasattr(obj, "tracer_cb"):
                     obj.tracer_cb = _tracer_cb
 

@@ -5,6 +5,34 @@
 
 ---
 
+## v1.2.9 — GUI 停止按钮真停止 + 商城误判二次确认 + 滑动禁识别 (2026-08-21)
+
+规格 v5「停止只弹提示不停止实际任务」+「商城误判退出」+「滑动中禁识别」:
+
+1. **GUI 停止按钮真停止(规格§一重点, 事故级根因)**: 旧实现 stop_event
+   只在 DeviceWorker.run() 循环头检查, 但进入 execute_task/login/
+   wait_home 后是单个长调用, 期间绝不检查 — GUI 点停止弹"已停止",
+   后台仍继续控制手机(客户实测)。修复协作式中断:
+   - 新增 core/stop_error.py WorkerStopRequested(BaseException);
+   - worker _wire_heartbeat 注入 stop_cb = stop_event|_local_stop;
+   - adapter.tick_heartbeat + detector._hb + web_context.wait_game_return
+     每轮检查 stop_cb, 置位即抛 WorkerStopRequested;
+   - run() 顶层专门捕获(BaseException 穿透各层 except Exception 不被吞)。
+   长循环每轮间隔 ≤2s(滑动 0.4s/登录 0.5-2s), 保证 1 秒内停止手机操作。
+2. **商城误判退出二次确认(规格§七)**: _shop_still_open 旧单次检测到
+   MAP/MAIN_MENU 即判退出 — 滑动动画帧可能瞬时误判。改: 首次检测到
+   退出状态 → sleep(0.6) 等动画停下 + bust_caches 强制最新画面重检,
+   二次确认仍退出状态且非 SHOP 才算真退出; 回 SHOP/UNKNOWN 视为瞬时
+   误判继续滑动。一次误识别不再直接退出商城。
+3. **滑动期间禁止识别商品(规格§五)**: _scroll_pass 移除滑动中商品快检
+   (旧 i>=2 偶数轮调 _detect_product — 规格判为"第2次滑动后识别"错误)。
+   第一阶段完整滑 6 次(到底判停除外) → 统一识别; 未中补 3 次 → 再识别。
+   滑动中只保留异常退出守卫(不识别商品)。
+
+- **测试**: 新增停止链路 2 条(stop_cb 注入 + BaseException 穿透),
+  更新 TestShopFastScrollToBottom 2 条对齐"滑完才统一识别"契约。
+  全量 365 条通过。
+
 ## v1.2.8 — 弹窗识别非阻塞化 + 商城定数滑动(删回滚) (2026-08-21)
 
 规格 v4「主页识别后等 42 秒才点球」+「商城滚过头回滚逻辑错误」:

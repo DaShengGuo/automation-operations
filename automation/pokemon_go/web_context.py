@@ -292,6 +292,11 @@ class ExternalWebContext:
             cb = getattr(self, "heartbeat_cb", None)
             if cb:
                 cb()
+            # 停止检查(2026-08-21): stop_event 置位即中断认证等待
+            stop_cb = getattr(self, "stop_cb", None)
+            if stop_cb and stop_cb():
+                from core.stop_error import WorkerStopRequested
+                raise WorkerStopRequested("停止指令生效, 中断认证等待")
             if self.detector.is_game_foreground():
                 self.log.info(f"[PTC] 已返回游戏 (用时 "
                               f"{time.time() - t0:.0f}s)")

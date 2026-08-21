@@ -12,7 +12,8 @@ version.py
   v1.2.2  启动等待智能化(快速轮询分层/检查点日志/MAP二次确认防转场误判)
   v1.2.3  流程时间对齐人工实测 + 商城滑动状态锁 + 判底灰度通道修复
   v1.2.4  商城滑动误退出根因修复(MAIN_MENU误判商城+精确坐标滑动+BACK守卫)
-  v1.2.8  弹窗识别非阻塞+商城定数滑动删回滚
+  v1.2.9  GUI停止按钮真停止+商城误判二次确认+滑动禁识别
+  v2.0.0  重大架构升级
   v2.0.0  重大架构升级
   v2.0.0  重大架构升级
   v2.0.0  重大架构升级
@@ -21,7 +22,7 @@ version.py
 
 APP_NAME = "宝可梦自动化购买脚本"
 APP_NAME_EN = "PokemonAutomation"
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 APP_VERSION_TAG = f"v{APP_VERSION}"
 APP_TITLE = "欢迎使用宝可梦自动化购买脚本"
 APP_PUBLISHER = "PokemonAutomation"
