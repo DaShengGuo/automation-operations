@@ -211,15 +211,51 @@ class ShopAutomation:
             return False
         return True
 
+    # ── 滑动循环辅助(规格 2026-08-21 单步滑动重写) ──
+
+    def _downsample_gray(self):
+        """截图并降采样为灰度小图(36×80), 用于前后帧比对判变化。
+        截图统一 BGR(见 device_manager), 用 BGR2GRAY 与 detector 一致。
+        失败返回 None。"""
+        try:
+            shot = self.d.screenshot()
+            gray = cv2.cvtColor(shot, cv2.COLOR_BGR2GRAY)
+            return cv2.resize(gray, (36, 80))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _frame_changed(a, b) -> bool:
+        """两帧降采样灰度图是否发生变化(平均差容差 < 4.0 视为未变)。
+        None 任一 → 视为变化(保守, 不误判到底)。"""
+        if a is None or b is None:
+            return True
+        diff = float(np.abs(a.astype(np.int16)
+                            - b.astype(np.int16)).mean())
+        return diff >= 4.0
+
+    def _do_swipe(self, x: int, y1: int, y2: int):
+        """执行一次精确坐标上滑(duration 0.5s)。异常吞掉(滑动失败由
+        后续前后帧比对兜底 — 无变化时重试一次再判底, 不卡死)。"""
+        try:
+            self.d.swipe(x, y1, x, y2, duration=0.5)
+        except Exception as e:
+            self.log.debug(f"[SHOP] swipe 异常: {e}")
+
     def find_product(self, max_scroll: int = 12) -> Optional[ProductInfo]:
         """滚动直到目标商品出现(§三/§四)。
 
         真机实测(用户确认): 100 寶可幣在商店列表最底部 —
         策略(两阶段):
-          1) 快速滑底 — 大距离连滑, 每 2 次滑动作一次 OCR 快检
-             (商品一出现立即停止, 不再滑过头);
-             判底用降采样+容差对比(倒计时等小面积动态元素不影响判定,
-             纯哈希对比会因计时器每秒跳动永远判不了底);
+          1) 单步滑动循环(规格 2026-08-21 重写) —
+             每轮: 截图(before) → 滑一次 → 等0.8s触摸完成 → 截图(after)
+                   → 比对前后帧判断是否变化;
+             - 变化 → 继续下一轮(未到底);
+             - 无变化 → 重试一次滑动再判, 仍无变化才算到底
+               (防滑动未生效/触摸未完成误判到底导致卡死);
+             - 商品快检穿插(每2轮, 商品出现立即停, 不滑过头);
+             - 滑动中异常退出守卫(kicked_out)。
+             不连续快速 swipe()swipe()swipe() — 每次滑动后等触摸完成再判。
           2) 到底后再 OCR — 从底部往上 4 屏搜索(商品在最底, 必覆盖);
           3) 仍未找到才回滚兜底。
 
@@ -244,15 +280,20 @@ class ShopAutomation:
         swipe_y1 = int(sh * 0.75)   # 1800(基准)
         swipe_y2 = int(sh * 0.167)  # 400(基准)
         try:
-            # 阶段 1: 立即连续上滑 + 周期性商品快检 + 容差判底
-            # 进店后不等待 — 第一次循环直接滑动(规格: 进店即滑, 3秒到底)
-            last_small = None
-            stale_count = 0
-            for scroll in range(max_scroll):
+            # 阶段 1: 单步滑动循环(规格 2026-08-21 重写)
+            #   每轮: 截图(before) → 滑一次 → 等0.8s触摸完成 → 截图(after)
+            #         → 比对前后帧判断页面是否变化
+            #   - 变化 → 继续下一轮(未到底)
+            #   - 无变化 → 重试一次滑动再判, 仍无变化才算到底(防滑动未生效误判)
+            #   - 商品快检穿插(商品出现立即停, 不滑过头)
+            #   - 滑动中异常退出守卫(kicked_out)
+            last_after = None          # 上一轮滑动后的截图(用于跨轮判变化)
+            stale_count = 0            # 连续无变化次数(≥2 判底)
+            scroll = 0
+            while scroll < max_scroll:
                 self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
-                # 商品快检: 商品出现立即停止(用户要求: 看到商品就进行下一步)
+                # 商品快检(商品出现立即停, 不滑过头): 每 2 轮做一次
                 if scroll >= 2 and scroll % 2 == 0:
-                    # 异常退出守卫(OCR 已缓存, 状态检测零额外开销)
                     if not self._shop_still_open():
                         self.kicked_out = True
                         self.log.error("[ERROR] 商城滑动过程中退出 "
@@ -265,41 +306,51 @@ class ShopAutomation:
                                       f"({info.price}) (滚动 {scroll} 次)")
                         self.a._mark_trace("PACKAGE_FOUND")
                         return info
-                # 判底: 降采样灰度 + 平均差容差(截图统一 BGR, 用 BGR2GRAY
-                # 与 detector 一致 — 旧 RGB2GRAY 对 R/B 权重不同致 diff 偏差)
-                try:
-                    shot = self.d.screenshot()
-                    gray = cv2.cvtColor(shot, cv2.COLOR_BGR2GRAY)
-                    small = cv2.resize(gray, (36, 80))
-                except Exception:
-                    small = None
-                if small is not None and last_small is not None:
-                    diff = float(np.abs(small.astype(np.int16)
-                                        - last_small.astype(np.int16)).mean())
-                else:
-                    diff = 999.0
-                if diff < 4.0:
-                    stale_count += 1
-                else:
-                    stale_count = 0
-                last_small = small
-                if stale_count >= 2:
-                    self.log.info(f"[SHOP] 检测到底 (连续两次截图无变化, "
-                                  f"滚动 {scroll} 次) — 停止滑动")
-                    self.a._mark_trace("SHOP_BOTTOM_REACHED")
-                    break
                 # 滑底阶段预算: 超时不再滑, 直接进入搜索阶段(§五)
                 if time.time() - t0 > scroll_budget:
                     self.log.warning(f"[SHOP] 滑底阶段超预算({scroll_budget}s) "
                                      f"— 停止滑动, 进入搜索阶段")
                     self.a.capture_keyframe("SHOP_SCROLL_BUDGET_EXCEEDED")
                     break
+                # ── 单步滑动: before → swipe → 等0.8s → after → 比对 ──
+                before = self._downsample_gray()
                 self.log.info(f"[SHOP] 开始第 {scroll + 1} 次滑动")
-                # 精确坐标上滑(duration 0.5s) — 比方向滑动可控, 不触边
-                self.d.swipe(swipe_x, swipe_y1, swipe_x, swipe_y2,
-                             duration=0.5)
-                # 间隔 0.3~0.8s(规格): 让页面渲染稳定再判底, 但不卡顿
-                time.sleep(0.4)
+                self._do_swipe(swipe_x, swipe_y1, swipe_y2)
+                time.sleep(0.8)   # 等待触摸事件完成 + 页面渲染稳定(规格)
+                after = self._downsample_gray()
+                # 判断本轮滑动是否使页面变化(滑动前后比对)
+                changed = self._frame_changed(before, after)
+                # 跨轮: 本轮 after 与上一轮 after 也无变化 → 累加 stale
+                if not changed and last_after is not None and \
+                        not self._frame_changed(last_after, after):
+                    stale_count += 1
+                else:
+                    stale_count = 0
+                last_after = after
+                if not changed:
+                    # 滑动未使页面变化 — 可能到底, 也可能触摸未生效。
+                    # 规格: 重试一次滑动再判, 不直接判底防卡死/误判。
+                    self.log.info(f"[SHOP] 第 {scroll + 1} 次滑动后页面无变化 "
+                                  f"— 重试一次确认是否到底")
+                    self._do_swipe(swipe_x, swipe_y1, swipe_y2)
+                    time.sleep(0.8)
+                    after2 = self._downsample_gray()
+                    if self._frame_changed(after, after2):
+                        # 重试后页面变了 → 之前是滑动未生效, 继续正常滑动
+                        stale_count = 0
+                        last_after = after2
+                        self.log.info(f"[SHOP] 重试滑动后页面变化 — 继续滑动")
+                    else:
+                        # 重试仍无变化 → 真的到底(连续两次滑动无变化)
+                        stale_count += 1
+                        self.log.info(f"[SHOP] 重试滑动仍无变化 — 确认到底 "
+                                      f"(滚动 {scroll + 1} 次)")
+                        self.a._mark_trace("SHOP_BOTTOM_REACHED")
+                        scroll += 1
+                        break
+                scroll += 1
+            else:
+                self.log.info(f"[SHOP] 达到最大滑动次数 {max_scroll} — 停止滑动")
 
             # 阶段 2: 底部往上 4 屏 OCR 搜索
             for i in range(4):

@@ -236,6 +236,57 @@ def test_shop_not_misdetected_as_main_menu(env, monkeypatch):
         f"商城页(含 Shop 文字)必须判 SHOP, 不得误判 MAIN_MENU(实际={state.value})"
 
 
+# ── 4e: 滑动无变化时重试一次再判底(规格核心 — 防滑动未生效卡死) ──────
+
+def test_scroll_retry_on_no_change_then_bottom(env, monkeypatch):
+    """滑动后页面无变化 → 必须重试一次滑动再判, 仍无变化才算到底。
+
+    规格(2026-08-21): 滑动后等0.8s检测页面是否变化。无变化时不要卡死,
+    执行再次尝试一次滑动。重试仍无变化才确认到底。
+    防止「触摸事件未完成/滑动未生效」被误判为到底导致脚本卡住。
+    """
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    # 滑动 4 次后页面钉底(截图不再变化) — 模拟到底
+    swipe_calls = {"n": 0}
+    orig_swipe = ctrl.swipe
+
+    def counted_swipe(x1, y1, x2, y2, duration=0.3):
+        swipe_calls["n"] += 1
+        # 前 4 次上滑使 up_swipes 递增(截图种子变化, 页面变化)
+        # 之后 up_swipes 锁定, 截图种子不变(模拟到底)
+        if y1 > y2:
+            ctrl.up_swipes += 1
+    monkeypatch.setattr(ctrl, "swipe", counted_swipe)
+
+    info = adapter.shop_auto.find_product(max_scroll=12)
+    assert info is None  # 无目标商品
+    # 必须发生重试滑动(无变化后的第二次 swipe) — 验证重试机制存在
+    # 12 次上限内到底: 4 次正常滑动 + 至少 1 次重试滑动
+    assert swipe_calls["n"] > 4, \
+        f"滑动无变化时必须重试一次(规格), 实际 swipe {swipe_calls['n']} 次"
+    assert adapter.shop_auto.scrolling is False, "退出后释放锁"
+
+
+def test_scroll_no_change_does_not_infinite_loop(env, monkeypatch):
+    """页面一开始就钉底(第一次滑动就无变化) → 重试一次后判底, 不无限滑。"""
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    swipe_calls = {"n": 0}
+
+    def static_swipe(x1, y1, x2, y2, duration=0.3):
+        swipe_calls["n"] += 1
+        # 不累加 up_swipes — 截图种子恒定 (min(0,3),SHOP) 页面钉底
+    monkeypatch.setattr(ctrl, "swipe", static_swipe)
+
+    info = adapter.shop_auto.find_product(max_scroll=12)
+    assert info is None
+    # 第一次滑动无变化 → 重试一次 → 仍无变化 → 判底 break
+    # 总滑动次数应很小(2次: 初次+重试), 不触达 max_scroll
+    assert swipe_calls["n"] <= 4, \
+        f"页面钉底必须快速判底不无限滑(实际 {swipe_calls['n']} 次)"
+
+
 # ── 5: 异常退出 → 重进商城(≤2) → 找到商品 ───────────────────────
 
 def test_find_product_with_guards_reenters_bounded(env, monkeypatch):
