@@ -48,12 +48,11 @@ class ShopAutomation:
         self.shop_cfg = self.sel.shop
         self.purchase_cfg = self.sel.purchase
         self.log = adapter.log
-        # 商城异常退出标记(§四): 滑动中检测到首页 UI 出现 → True,
-        # find_product 提前返回 None, 调用方据此重进商城(≤2 次)
-        self.kicked_out = False
         # 商城滑动状态保护锁(规格九): 滑动期间置 True, 禁止外部状态机
         # 介入返回主页/登录/下一账号/APP重启逻辑 — 只有商城到底或异常
         # 才能改变状态。find_product 进入时置 True, 退出(到底/异常/找到)置 False。
+        # (2026-08-22: 滑动期间退出判断(kicked_out)已删除 — 规格强制方案
+        #  砍掉「检测MAIN_MENU→认为退出→重新进入商城」错误分支)
         self.scrolling = False
 
     # ── 进店 / 离店 ──
@@ -192,93 +191,32 @@ class ShopAutomation:
         return state in (PokemonGoState.MAIN_MENU, PokemonGoState.MAP)
 
     # ── 滚动寻找商品 ──
-
-    def _shop_still_open(self) -> bool:
-        """商城流程中页面仍在商店内(规格 2026-08-21 §七/§八重写)。
-
-        四条件强证据确认真退出(全部满足才算 SHOP_EXITED):
-          1. 商城商品区域消失(OCR 无商城特征词: 寶可幣/宝可币/PokéCoins/
-             Pokecoins/US$/新手禮盒 等)
-          2. 商城标题消失(同上, 商城特征词涵盖标题/商品)
-          3. 主地图 UI 持续出现(连续两次 detect 均为退出态)
-          4. 连续两次截图确认(间隔 0.6s, bust_caches 强制最新画面)
-
-        商城特征存在优先: OCR 仍有商城特征词 → 认为仍在商城,
-        无视 MAP/主菜单误判(真机: 商城页红色商品图标曾误命中 MAP
-        单证据; 现已 min_hits=2, 再加本层商城特征兜底)。
-        UNKNOWN 视为转场/加载容忍。
-        """
-        exit_states = (PokemonGoState.MAIN_MENU, PokemonGoState.MAP,
-                       PokemonGoState.SETTINGS, PokemonGoState.LOGOUT_CONFIRM)
-        state = self.detector.detect()
-        if state not in exit_states:
-            return True
-        # 疑似退出 — 先查商城特征(规格§八 条件1/2): 特征词仍在 = 误判
-        if self._shop_texts_present():
-            self.log.info(f"[SHOP] 检测到 {state.value} 但商城特征仍在 "
-                          f"— 状态误判, 继续视为在商城")
-            return True
-        # 无商城特征 — 连续两次截图确认真退出(规格§八 条件3/4)
-        time.sleep(0.6)   # 等滑动动画停下(仅动画缓冲, 非流程等待)
-        self.detector.bust_caches()
-        confirm = self.detector.detect()
-        if confirm in exit_states:
-            self.log.warning(f"[商店] 商城真退出已确认(连续两次检测 "
-                             f"{confirm.value} 且商城特征消失)")
-            return False
-        # 二次检测回 SHOP/UNKNOWN → 瞬时误判, 继续滑动
-        self.log.info(f"[SHOP] 二次检测回 {confirm.value} — 瞬时误判, "
-                      f"继续滑动(不退出商城)")
-        return True
-
-    def _shop_texts_present(self) -> bool:
-        """OCR 是否仍有商城特征词(规格§八条件1/2: 商品区域/标题消失检测)。
-
-        商城特征词(真机 OCR 实测 + 配置规则一致): 寶可幣/宝可币/
-        PokéCoins/Pokecoins/US$/新手禮盒/偷兒狐/社群日 等。
-        OCR 失败(异常)保守视为特征仍在(不误判退出)。
-        """
-        shop_markers = ("寶可幣", "宝可币", "PokéCoins", "PokeCoins",
-                        "Pokecoins", "US$", "新手禮盒", "新手礼盒",
-                        "偷兒狐", "偷儿狐", "社群日", "Shop")
-        try:
-            boxes = self.detector.ocr_boxes()
-        except Exception:
-            return True   # OCR 不可用 → 保守, 不判退出
-        for text, _ in boxes:
-            if any(m in text for m in shop_markers):
-                return True
-        return False
+    # (2026-08-22 强制方案: SHOP_SCROLLING 期间禁止退出判断 —
+    #  _shop_still_open/_shop_texts_present 已删除。真机证实滑动中 OCR
+    #  暂时匹配不到商城特征词(动画帧/渲染抖动) → 误判 MAIN_MENU →
+    #  「商城真退出已确认」误伤正常滑动。退出判断只在非滑动状态允许,
+    #  当前流程不判断退出: 识别不到 → PRODUCT_NOT_FOUND 交上层。)
 
     # ── 滑动循环辅助(规格 2026-08-21 定数滑动) ──
 
     def _scroll_pass(self, count: int, swipe_x: int, y1: int, y2: int,
                      target_amount: str, t0: float, budget: float
                      ) -> Optional[ProductInfo]:
-        """连续大幅滑动 count 次(规格 2026-08-21 §四/§五/§九重写)。
+        """连续大幅滑动 count 次(规格 2026-08-22 强制方案重写)。
 
-        规格§五核心: 第一阶段必须完整滑 6 次, 期间禁止识别商品。
-        本方法纯滑动: 不识别商品、不判底、无超预算停止 —
-        滑动结束只由「完成规定次数」决定(规格§四: 删除 10 秒
-        超预算停止; 规格§九: 不每次滑动检测到底/识别商品)。
-        - 单次滑动 duration 0.8s, 间隔 0.4s(规格§九: 700-1000ms);
-        - 滑动中异常退出守卫(每 2 轮, 四条件强证据, 不识别商品);
-        返回 None(滑动完成/异常退出 — 不返回商品)。
+        SHOP_SCROLLING 期间严格锁定(规格§三/§五/§六):
+          - 禁止商品识别(滑满 6 次后才识别);
+          - 禁止退出判断 — 删除 _shop_still_open 守卫。真机证实滑动中
+            OCR 暂时匹配不到商城特征词(动画帧/渲染抖动) → 误判
+            MAIN_MENU → 「商城真退出已确认」误伤正常滑动(规格§七:
+            删除该错误恢复)。退出判断只在非滑动状态允许, 且当前
+            流程不判断退出(识别不到 → PRODUCT_NOT_FOUND 交上层)。
+          - 不判底、无超预算停止 — 滑动结束只由「完成规定次数」决定。
         """
         for i in range(count):
             self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
-            # 异常退出守卫(每 2 轮): 四条件强证据确认真退出才停止滑动。
-            # 不识别商品(规格§五: 滑动期间禁止识别, 滑完才统一识别)。
-            if i >= 2 and i % 2 == 0:
-                if not self._shop_still_open():
-                    self.kicked_out = True
-                    self.log.error("[ERROR] 商城滑动过程中真退出已确认")
-                    self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
-                    return None
-            self.log.info(f"[SHOP] 准备滑动 {i + 1}/{count}")
-            self.log.info(f"[SHOP] 执行滑动 {i + 1}/{count}")
+            self.log.info(f"[SHOP] 滑动 {i + 1}/{count}")
             self._do_swipe(swipe_x, y1, y2, duration=1.0)
-            self.log.info(f"[SHOP] 滑动完成 {i + 1}/{count}")
             time.sleep(0.5)   # 触摸间隔(duration 1.0s 后让滚动停下), 不判底
         return None
 
@@ -305,14 +243,13 @@ class ShopAutomation:
           2) 未识别 → 第二阶段补滑 second_pass(默认 3) 次 → 再识别。
         删除旧"滚过头回滚/反向查找"逻辑 — 目标是滑到底再识别,
         不是精确定位(规格§四: 禁止 rollback / reverse swipe)。
-        判底(连续 2 帧静帧无变化)是到底提前停优化, 不是回滚。
-        滑动参数: duration 0.7s + 间隔 0.4s(规格§七)。
+        滑动参数: duration 1.0s + 间隔 0.5s。
 
-        异常退出守卫: 滑动中检测到商城外页面立即停止(kicked_out=True),
-        调用方据此重进商城(≤2 次)。滑动期间状态锁 scrolling(规格§八:
-        禁止滚过头判断/自动回滚/返回主页/重置流程)。
+        SHOP_SCROLLING 状态锁定(规格§三/§五/§六): 滑动期间禁止商品
+        识别/退出判断/补滑/点击 — 只有滑动完成后才进入
+        SHOP_SEARCH_PRODUCT 阶段识别。滑动期间无退出判断(规格§七:
+        删除「检测MAIN_MENU→认为退出→重新进入商城」错误分支)。
         """
-        self.kicked_out = False
         self.scrolling = True   # 商城滑动状态保护锁(规格九): 滑动期间禁止外部状态机介入
         target_amount = str(self.shop_cfg.get("target", {}).get(
             "amount", "100"))
@@ -346,12 +283,11 @@ class ShopAutomation:
         self.log.info(f"[SHOP] 滑动坐标: ({swipe_x},{swipe_y1}) → "
                       f"({swipe_x},{swipe_y2}) duration=1.0s")
         try:
-            # ── 第一阶段: 完整大幅滑动 first_pass 次(期间禁止识别) ──
+            # ── 第一阶段: 完整大幅滑动 first_pass 次(SHOP_SCROLLING 锁定,
+            # 期间禁止识别/退出判断/补滑 — 规格§三/§五) ──
             self._scroll_pass(first_pass, swipe_x, swipe_y1, swipe_y2,
                               target_amount, 0.0, 0.0)
-            if self.kicked_out:
-                return None
-            # 滑满 6 次后才第一次识别(规格§五)
+            # 滑满 6 次后才第一次识别(规格§五: SHOP_SEARCH_PRODUCT 阶段)
             self.log.info(f"[SHOP] 开始识别 {target_amount} 宝可梦")
             info = self._detect_product(target_amount)
             if info and info.matched:
@@ -364,8 +300,6 @@ class ShopAutomation:
             self.log.info(f"[SHOP] 未识别到, 补滑 {second_pass} 次再识别")
             self._scroll_pass(second_pass, swipe_x, swipe_y1, swipe_y2,
                               target_amount, 0.0, 0.0)
-            if self.kicked_out:
-                return None
             info = self._detect_product(target_amount)
             if info and info.matched:
                 self.log.info(f"[SHOP] 识别成功, 开始购买: {info.name} "

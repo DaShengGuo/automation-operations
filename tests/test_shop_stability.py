@@ -147,18 +147,24 @@ def test_enter_shop_timeout_captures_and_warm_restarts(env):
     assert adapter.detect_state() == PokemonGoState.SHOP
 
 
-# ── 4: 滑动中商城异常退出 → kicked_out + 提前停止 ────────────────
+# ── 4: SHOP_SCROLLING 期间禁止退出判断(2026-08-22 强制方案) ──────
 
-def test_find_product_kicked_out_stops_early(env):
+def test_scroll_ignores_exit_signal_during_scrolling(env):
+    """滑动期间即使场景切回主菜单(模拟退出信号), 也绝不中断滑动。
+
+    规格 2026-08-22 §三/§五/§七: SHOP_SCROLLING 期间禁止 MAIN_MENU/
+    MAP 判断/退出检测(真机证实滑动中 OCR 暂时匹配不到商城特征词 →
+    误判 MAIN_MENU → 误伤正常滑动)。滑动只由完成规定次数结束。
+    """
     ctrl, adapter = env
     ctrl.scene = "SHOP"
-    ctrl.kick_after_up_swipes = 2    # 上滑 2 次后场景切回主菜单
+    ctrl.kick_after_up_swipes = 2    # 上滑 2 次后场景切回主菜单(模拟误判信号)
 
     info = adapter.shop_auto.find_product(max_scroll=12)
-    assert info is None
-    assert adapter.shop_auto.kicked_out is True, "必须标记商城异常退出"
-    assert ctrl.up_swipes <= 3, \
-        f"检测到首页 UI 出现必须立即停止滑动(实际 {ctrl.up_swipes} 次)"
+    assert info is None              # 脚本场景无目标商品
+    # 退出信号被忽略: 完整滑满 6+3=9 次, 绝不提前中断
+    assert ctrl.up_swipes == 9, \
+        f"滑动期间禁止退出判断, 必须完整滑 9 次(实际 {ctrl.up_swipes} 次)"
 
 
 # ── 4b: 商城滑动状态保护锁(规格九) — 滑动期间 scrolling=True, 退出释放 ──

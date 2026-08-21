@@ -5,6 +5,29 @@
 
 ---
 
+## v1.3.5 — 砍掉商城滑动期间退出判断错误分支 (2026-08-22)
+
+强制方案「商城真退出已确认误伤正常滑动」— 砍掉错误分支:
+
+1. **删滑动中退出守卫(核心)**: `_scroll_pass` 内每 2 轮的
+   `_shop_still_open()` 守卫彻底删除 — 真机证实滑动中 OCR 暂时匹配
+   不到商城特征词(动画帧/渲染抖动) → 误判 MAIN_MENU →「商城真退出
+   已确认」中断滑动(客户日志所见)。SHOP_SCROLLING 期间严格锁定:
+   禁止商品识别/退出判断/MAIN_MENU 检测/MAP 检测/补滑/点击。
+2. **删 `_shop_still_open`/`_shop_texts_present` 死代码**: 退出判断
+   只在非滑动状态允许(规格§六), 当前流程不判断退出 — 识别不到 →
+   PRODUCT_NOT_FOUND 交上层正常处理。
+3. **删 kicked_out 标记**: 属性/赋值/分支全部移除, 状态锁 scrolling
+   (back_safe 守卫依赖)保留。
+4. **最终状态流转(规格§八)**: CLICK_SHOP → SHOP → SHOP_SCROLLING
+   (滑动1/6..6/6, 无任何检测) → SHOP_SEARCH_PRODUCT(识别) → BUY;
+   未识别 → 补滑3次 → 再识别。日志只有 [SHOP] 滑动 N/6 与
+   [SHOP] 开始识别100宝可梦, 无「第一次未识别/商城真退出」分支。
+
+- **测试**: 重写 test_find_product_kicked_out_stops_early →
+  test_scroll_ignores_exit_signal_during_scrolling(滑动期间退出信号
+  被忽略, 完整滑满 9 次)。全量 371 条通过。
+
 ## v1.3.4 — 删 MAP→HANDLE_POPUPS 状态跳转 + 滑动起点避开 X 关闭按钮 (2026-08-22)
 
 强制修复方案 t9k4m「旧状态机没有删除 + 商城滑动坐标设计错误」:

@@ -882,15 +882,12 @@ class PokemonGoAdapter(BaseGameAutomation):
             return TaskOutcome(False, "EXCEPTION", str(e))
 
     def _find_product_with_guards(self):
-        """找商品(规格 2026-08-21 §七: 删除自动重新进入商城)。
+        """找商品(规格 2026-08-22 强制方案: 单次透传, 无退出判断无重进)。
 
-        旧实现: 滑动后 detect 到 MAP/主菜单 → 自动重进商城 ≤2 次 —
-        真机证实该判断不可靠(商城页红色商品图标误判 MAP), 导致
-        商城没退出却反复重进。现改为:
-          - 退出判定由 shop._shop_still_open 四条件强证据把关
-            (商城特征消失 + 连续两次确认), 滑动中命中才真退出;
-          - find_product 返回 None(真退出/未找到) → 直接返回,
-            不再自动重进商城(交给上层正常流程处理)。
+        SHOP_SCROLLING 期间不检测退出(旧实现 detect MAP/主菜单 → 重进
+        商城 ≤2 次 — 真机证实滑动中 OCR 暂时匹配不到商城特征词会误判,
+        误伤正常滑动)。find_product 返回 None(未找到) → 直接返回,
+        交给上层正常流程处理(PRODUCT_NOT_FOUND)。
         """
         return self.shop_auto.find_product()
 
