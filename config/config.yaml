@@ -57,7 +57,7 @@ logout_required: true
 timeouts:
   check_device: 60
   launch: 60
-  detect_page: 60
+  detect_page: 30   # 2026-08-21: 60→30 — GAME_SPLASH→注册页人工~9s, 30s 上限足够; 页面出现即转态, 超时仅保险
   login: 90
   home: 120
   popup: 3            # 2026-08-21: 15→3 — 弹窗只做快速检查(规格: 主页后3秒内点菜单)

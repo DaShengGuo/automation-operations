@@ -435,6 +435,10 @@ class DeviceWorker(threading.Thread):
             page = self._page()
             self.runtime.page = page.value
             if page == PageState.LOGIN:
+                # 检测到登录入口页(已註冊/未註冊) — 立即进入登录流程
+                # (本状态就是「等待注册页出现」的快速检测, 页面一出现
+                # 即转 LOGIN 点击已註冊, 无固定等待)
+                self.log.info("[REGISTER] 检测到登录入口页 — 进入登录流程")
                 self._enter_state(WorkerState.LOGIN)
             elif page == PageState.HOME:
                 if self._login_done:

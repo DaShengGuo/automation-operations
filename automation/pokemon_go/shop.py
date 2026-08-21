@@ -275,8 +275,10 @@ class ShopAutomation:
                     self.log.error("[ERROR] 商城滑动过程中真退出已确认")
                     self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
                     return None
+            self.log.info(f"[SHOP] 准备滑动 {i + 1}/{count}")
             self.log.info(f"[SHOP] 执行滑动 {i + 1}/{count}")
             self._do_swipe(swipe_x, y1, y2, duration=1.0)
+            self.log.info(f"[SHOP] 滑动完成 {i + 1}/{count}")
             time.sleep(0.5)   # 触摸间隔(duration 1.0s 后让滚动停下), 不判底
         return None
 
@@ -320,22 +322,30 @@ class ShopAutomation:
         first_pass = int(self.shop_cfg.get("scroll_first_pass", 6))
         second_pass = int(self.shop_cfg.get("scroll_second_pass", 3))
         self.log.info(f"[SHOP] 开始大幅滑动 {first_pass} 次")
-        # 滑动参数(规格 2026-08-21 §八~§十): 坐标必须走 CoordinateMapper —
-        # 与 click_ratio 同一体系(含安全区 clamp, 防底部手势区截获触摸)。
-        # 旧实现直接用 screen_h 比例换算: 真机分辨率/稳定边距(insets)不同
-        # 时坐标可能落入系统手势区或超屏 → swipe 静默失效(「日志显示滑动
-        # 执行但页面不动」根因)。基准 1080×2400: 中心 x=540, y=2200→200。
+        # 滑动参数(规格 2026-08-21 §七): 坐标必须走 CoordinateMapper —
+        # 与 click_ratio 同一体系(含安全区 clamp)。旧裸换算在真机分辨率/
+        # 稳定边距不同时坐标可能落入系统手势区或超屏 → 触摸被系统截获
+        # →「日志显示滑动执行但页面不动」根因。基准 1080×2400:
+        # 中心 x=540, y=2200→100(规格: 屏幕底部附近→顶部附近)。
         mapper = getattr(self.d, "mapper", None)
         if mapper is not None:
             swipe_x = mapper.map_ratio(0.5, 0.5)[0]
-            swipe_y1 = mapper.map(540, 2200)[1]
-            swipe_y2 = mapper.map(540, 200)[1]
+            swipe_y2 = mapper.map(540, 100)[1]   # 终点: 顶部附近
+            # 起点: 底部附近, 但必须避开系统底部手势区/导航条 —
+            # 从手势区开始的触摸会被系统截获(游戏收不到, 页面不动)。
+            # 稳定边距(insets.bottom)之上再留 80px 安全余量。
+            raw_y1 = mapper.map(540, 2200)[1]
+            bottom_margin = int(getattr(mapper.insets, "bottom", 0)) + 80
+            max_y1 = max(1, getattr(self.d, "screen_h", 2400) - bottom_margin)
+            swipe_y1 = min(raw_y1, max_y1)
         else:
             sw = max(1, getattr(self.d, "screen_w", 1080))
             sh = max(1, getattr(self.d, "screen_h", 2400))
             swipe_x = sw // 2
-            swipe_y1 = int(sh * 0.917)  # 2200(基准 2400)
-            swipe_y2 = int(sh * 0.083)  # 200(基准 2400)
+            swipe_y1 = min(int(sh * 0.917), sh - 80)  # 2200(基准), 避底边
+            swipe_y2 = int(sh * 0.042)                # 100(基准 2400)
+        self.log.info(f"[SHOP] 滑动坐标: ({swipe_x},{swipe_y1}) → "
+                      f"({swipe_x},{swipe_y2}) duration=1.0s")
         try:
             # ── 第一阶段: 完整大幅滑动 first_pass 次(期间禁止识别) ──
             self._scroll_pass(first_pass, swipe_x, swipe_y1, swipe_y2,
