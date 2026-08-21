@@ -45,19 +45,22 @@ class PopupHandler:
         m = popup["match"]
         if not m:
             return False
-        if "text" in m and m["text"]:
-            ok, _ = self.detector.find_element({"text": m["text"]}, timeout=1.5)
-            if ok:
+        # 非阻塞快速判断(2026-08-21 速度优化): 旧实现 find_element(timeout=1.5)
+        # 用 u2 el.wait() 阻塞轮询, 无弹窗时每个 popup 睡满 1.5s — N 个 popup
+        # 配置 ×1.5s 累积(handle_popups 每次调用 4.5s+, 主页→点球路径被多次
+        # 调用, 是「检测主页成功后等几十秒」的根因之一)。改用 d.exists 瞬时
+        # 判断(一次 dump_hierarchy + 内存匹配, 不阻塞)。
+        d = self.detector.d
+        try:
+            if "text" in m and m["text"] and d.exists(text=m["text"], timeout=0):
                 return True
-        if "desc" in m and m["desc"]:
-            ok, _ = self.detector.find_element({"desc": m["desc"]}, timeout=1.5)
-            if ok:
+            if "desc" in m and m["desc"] and d.exists(description=m["desc"], timeout=0):
                 return True
-        if "resource_id" in m and m["resource_id"]:
-            ok, _ = self.detector.find_element(
-                {"resource_id": m["resource_id"]}, timeout=1.5)
-            if ok:
-                return True
+            if "resource_id" in m and m["resource_id"]:
+                if d.exists(resourceId=m["resource_id"], timeout=0):
+                    return True
+        except Exception as e:
+            logger.debug(f"[弹窗] exists 判断异常: {e}")
         if "template" in m and m["template"] and self.actions.matcher:
             try:
                 shot = self.detector.d.screenshot()

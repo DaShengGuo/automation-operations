@@ -211,7 +211,57 @@ class ShopAutomation:
             return False
         return True
 
-    # ── 滑动循环辅助(规格 2026-08-21 单步滑动重写) ──
+    # ── 滑动循环辅助(规格 2026-08-21 定数滑动) ──
+
+    def _scroll_pass(self, count: int, swipe_x: int, y1: int, y2: int,
+                     target_amount: str, t0: float, budget: float
+                     ) -> Optional[ProductInfo]:
+        """连续滑动 count 次(规格§五/§六/§七)。
+
+        - 单次滑动 duration 0.7s, 间隔 0.4s(规格§七: 600-800ms / 300-500ms);
+        - 商品快检穿插(每 2 轮, 商品出现立即停, 不滑过头);
+        - 静帧判底(连续 2 帧无变化)提前停 — 到底优化, 非回滚;
+        - 滑动中异常退出守卫(kicked_out);
+        - 超预算停。
+        返回 ProductInfo(商品命中)或 None(未命中/到底/超预算/异常退出)。
+        """
+        last_still = None
+        stale_count = 0
+        for i in range(count):
+            self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
+            # 商品快检(每 2 轮): 商品出现立即停, 不滑过头
+            if i >= 2 and i % 2 == 0:
+                if not self._shop_still_open():
+                    self.kicked_out = True
+                    self.log.error("[ERROR] 商城滑动过程中退出 "
+                                   f"(当前状态={self.detector.detect().value})")
+                    self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
+                    return None
+                info = self._detect_product(target_amount)
+                if info and info.matched:
+                    self.log.info(f"[SHOP] 滑动中识别到目标商品: {info.name} "
+                                  f"({info.price}) (第 {i + 1} 次)")
+                    self.a._mark_trace("PACKAGE_FOUND")
+                    return info
+            if time.time() - t0 > budget:
+                self.log.warning(f"[SHOP] 滑动超预算({budget}s) — 停止滑动")
+                self.a.capture_keyframe("SHOP_SCROLL_BUDGET_EXCEEDED")
+                break
+            self.log.info(f"[SHOP] 开始快速滑动 {i + 1}/{count}")
+            self._do_swipe(swipe_x, y1, y2, duration=0.7)
+            time.sleep(0.4)   # 让滚动停下判底, 不长等待(规格§七)
+            still = self._downsample_gray()
+            if last_still is not None and not self._frame_changed(last_still, still):
+                stale_count += 1
+            else:
+                stale_count = 0
+            last_still = still
+            if stale_count >= 2:
+                self.log.info(f"[SHOP] 检测到底 (连续两次静帧无变化, "
+                              f"第 {i + 1} 次) — 停止滑动")
+                self.a._mark_trace("SHOP_BOTTOM_REACHED")
+                break
+        return None
 
     def _downsample_gray(self):
         """截图并降采样为灰度小图(36×80), 用于前后帧比对判变化。
@@ -234,33 +284,29 @@ class ShopAutomation:
                             - b.astype(np.int16)).mean())
         return diff >= 4.0
 
-    def _do_swipe(self, x: int, y1: int, y2: int):
-        """执行一次精确坐标上滑(duration 0.5s)。异常吞掉(滑动失败由
-        后续前后帧比对兜底 — 无变化时重试一次再判底, 不卡死)。"""
+    def _do_swipe(self, x: int, y1: int, y2: int, duration: float = 0.7):
+        """执行一次精确坐标上滑(规格§七: duration 600-800ms)。
+        异常吞掉(滑动失败由后续静帧比对兜底)。"""
         try:
-            self.d.swipe(x, y1, x, y2, duration=0.5)
+            self.d.swipe(x, y1, x, y2, duration=duration)
         except Exception as e:
             self.log.debug(f"[SHOP] swipe 异常: {e}")
 
     def find_product(self, max_scroll: int = 12) -> Optional[ProductInfo]:
-        """滚动直到目标商品出现(§三/§四)。
+        """定数滑动找商品(规格 2026-08-21 §四~§八重写)。
 
         真机实测(用户确认): 100 寶可幣在商店列表最底部 —
-        策略(两阶段):
-          1) 快速连续滑动(规格 2026-08-21 v2 — 保持连续滑动, 不做单步确认)
-             进店确认后直接连滑到底:
-             - 连续 swipe 不做前后帧确认(避免每轮 0.8s 确认拖慢, 3秒滑不到
-               底反而被 10s 预算打断 — 这是"卡住没到底"的根因);
-             - 判底: 每次滑动后短停 0.3s 让页面滚动停下, 截一帧静帧;
-               连续 2 帧静帧无变化 = 到底(容差对比, 倒计时等小动态元素不影响);
-             - 商品快检穿插(每 2 轮, 商品出现立即停, 不滑过头);
-             - 滑动中异常退出守卫(kicked_out)。
-          2) 到底后再 OCR — 从底部往上 4 屏搜索(商品在最底, 必覆盖);
-          3) 仍未找到才回滚兜底。
+        策略(两阶段定数滑动, 不回滚):
+          1) 第一阶段连续滑动 first_pass(默认 6) 次 → 识别商品;
+          2) 未识别 → 第二阶段补滑 second_pass(默认 3) 次 → 再识别。
+        删除旧"滚过头回滚/反向查找"逻辑 — 目标是滑到底再识别,
+        不是精确定位(规格§四: 禁止 rollback / reverse swipe)。
+        判底(连续 2 帧静帧无变化)是到底提前停优化, 不是回滚。
+        滑动参数: duration 0.7s + 间隔 0.4s(规格§七)。
 
         异常退出守卫: 滑动中检测到商城外页面立即停止(kicked_out=True),
-        调用方据此重进商城(≤2 次)。滑底阶段预算 shop_scroll, 超预算
-        直接进入搜索阶段, 禁止到底后继续疯狂滑。
+        调用方据此重进商城(≤2 次)。滑动期间状态锁 scrolling(规格§八:
+        禁止滚过头判断/自动回滚/返回主页/重置流程)。
         """
         self.kicked_out = False
         self.scrolling = True   # 商城滑动状态保护锁(规格九): 滑动期间禁止外部状态机介入
@@ -268,103 +314,53 @@ class ShopAutomation:
             "amount", "100"))
         scroll_budget = self.a._step_budget("shop_scroll", 10)
         find_budget = self.a._step_budget("shop_find", 40)
-        self.log.info("[SHOP] 开始滑动到底部")
+        # 定数滑动次数(规格 2026-08-21 §五/§六): 第一阶段 6 次, 第二阶段补 3 次。
+        # 不再"判滚过头回滚" — 目标是滑到底再识别, 不是精确定位。
+        first_pass = int(self.shop_cfg.get("scroll_first_pass", 6))
+        second_pass = int(self.shop_cfg.get("scroll_second_pass", 3))
+        self.log.info(f"[SHOP] 开始快速滑动 {first_pass} 次到底部")
         t0 = time.time()
-        # 滑动参数(规格 2026-08-21): 精确坐标上滑, 非大幅度方向滑动。
-        #   start_y=1800→end_y=400(基准 2400 高, ratio 0.75→0.167),
-        #   duration=500ms, 滑动间短停 0.3s 让滚动停下判底 — 人工 3 秒到底。
+        # 滑动参数(规格 §七): duration 600-800ms, 间隔 300-500ms, 不长等待。
+        #   start_y=1800→end_y=400(基准 2400 高, ratio 0.75→0.167)。
         sw = max(1, getattr(self.d, "screen_w", 1080))
         sh = max(1, getattr(self.d, "screen_h", 2400))
         swipe_x = sw // 2
         swipe_y1 = int(sh * 0.75)   # 1800(基准)
         swipe_y2 = int(sh * 0.167)  # 400(基准)
         try:
-            # 阶段 1: 快速连续滑动 + 静帧判底(规格七: 保持连续滑动逻辑)
-            #   连续 swipe 不做前后帧确认 — 判底靠"滑后静帧 vs 上一静帧",
-            #   连续 2 帧无变化才算到底。每轮仅 0.3s 停顿, 3 秒可滑 ~6 轮。
-            last_still = None          # 上一帧静帧(滑后停顿截图)
-            stale_count = 0            # 连续无变化次数(≥2 判底)
-            for scroll in range(max_scroll):
-                self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
-                # 商品快检(商品出现立即停, 不滑过头): 每 2 轮做一次
-                if scroll >= 2 and scroll % 2 == 0:
-                    if not self._shop_still_open():
-                        self.kicked_out = True
-                        self.log.error("[ERROR] 商城滑动过程中退出 "
-                                       f"(当前状态={self.detector.detect().value})")
-                        self.a.capture_keyframe("SHOP_KICKED_OUT_DURING_SCROLL")
-                        return None
-                    info = self._detect_product(target_amount)
-                    if info and info.matched:
-                        self.log.info(f"[SHOP] 找到目标商品: {info.name} "
-                                      f"({info.price}) (滚动 {scroll} 次)")
-                        self.a._mark_trace("PACKAGE_FOUND")
-                        return info
-                # 滑底阶段预算: 超时不再滑, 直接进入搜索阶段(§五)
-                if time.time() - t0 > scroll_budget:
-                    self.log.warning(f"[SHOP] 滑底阶段超预算({scroll_budget}s) "
-                                     f"— 停止滑动, 进入搜索阶段")
-                    self.a.capture_keyframe("SHOP_SCROLL_BUDGET_EXCEEDED")
-                    break
-                # 连续滑动: swipe → 短停 0.3s 让滚动停下 → 静帧
-                self.log.info(f"[SHOP] 开始第 {scroll + 1} 次滑动")
-                self._do_swipe(swipe_x, swipe_y1, swipe_y2)
-                time.sleep(0.3)   # 让页面滚动停下即可, 不做长确认
-                still = self._downsample_gray()
-                # 判底: 本帧静帧与上一帧静帧比对
-                if last_still is not None and not self._frame_changed(last_still, still):
-                    stale_count += 1
-                else:
-                    stale_count = 0
-                last_still = still
-                if stale_count >= 2:
-                    self.log.info(f"[SHOP] 检测到底 (连续两次静帧无变化, "
-                                  f"滚动 {scroll + 1} 次) — 停止滑动")
-                    self.a._mark_trace("SHOP_BOTTOM_REACHED")
-                    break
-            else:
-                self.log.info(f"[SHOP] 达到最大滑动次数 {max_scroll} — 停止滑动")
+            # ── 第一阶段: 连续滑动 first_pass 次 + 静帧判底提前停 ──
+            # (规格§五: 直接滑 6 次; 判底连续2帧无变化是优化提前停, 非回滚)
+            info = self._scroll_pass(first_pass, swipe_x, swipe_y1, swipe_y2,
+                                     target_amount, t0, scroll_budget)
+            if info is not None:
+                return info
+            if self.kicked_out:
+                return None
+            # 第一阶段后识别商品(规格§五: 6 次后识别 100 宝可梦)
+            self.log.info(f"[SHOP] 第一次识别 {target_amount} 宝可梦")
+            info = self._detect_product(target_amount)
+            if info and info.matched:
+                self.log.info(f"[SHOP] 发现目标商品: {info.name} "
+                              f"({info.price}) — 开始购买")
+                self.a._mark_trace("PACKAGE_FOUND")
+                return info
 
-            # 阶段 2: 底部往上 4 屏 OCR 搜索
-            for i in range(4):
-                self.a.tick_heartbeat()
-                if time.time() - t0 > find_budget:
-                    self.log.warning(f"[商店] 找商品总预算({find_budget}s)耗尽 "
-                                     f"— 停止搜索")
-                    break
-                info = self._detect_product(target_amount)
-                if info and info.matched:
-                    self.log.info(f"[商店] 找到目标商品: {info.name} "
-                                  f"({info.price}) (底部起第 {i + 1} 屏)")
-                    self.a._mark_trace("PACKAGE_FOUND")
-                    return info
-                if not self._shop_still_open():
-                    self.kicked_out = True
-                    return None
-                self.d.swipe_direction("down", distance=0.4)
-                time.sleep(0.6)
-
-            # 阶段 3: 兜底回滚查找
-            self.log.info("[商店] 可能滚过头, 反向回滚查找")
-            for i in range(4):
-                self.a.tick_heartbeat()
-                if time.time() - t0 > find_budget:
-                    self.log.warning(f"[商店] 找商品总预算({find_budget}s)耗尽 "
-                                     f"— 停止回滚")
-                    break
-                self.d.swipe_direction("down", distance=0.5)
-                time.sleep(1.0)
-                info = self._detect_product(target_amount)
-                if info and info.matched:
-                    self.log.info(f"[商店] 回滚找到目标商品: {info.name} "
-                                  f"({info.price}) (回滚 {i + 1} 次)")
-                    self.a._mark_trace("PACKAGE_FOUND")
-                    return info
-                if not self._shop_still_open():
-                    self.kicked_out = True
-                    return None
-            self.log.warning(f"[商店] 滑动 {max_scroll} 次仍未找到商品 → "
-                             f"PRODUCT_NOT_FOUND")
+            # ── 第二阶段: 补滑 second_pass 次再识别(规格§六) ──
+            self.log.info(f"[SHOP] 第一次未识别, 补滑 {second_pass} 次再识别")
+            info = self._scroll_pass(second_pass, swipe_x, swipe_y1, swipe_y2,
+                                     target_amount, t0, find_budget)
+            if info is not None:
+                return info
+            if self.kicked_out:
+                return None
+            info = self._detect_product(target_amount)
+            if info and info.matched:
+                self.log.info(f"[SHOP] 补滑后发现目标商品: {info.name} "
+                              f"({info.price}) — 开始购买")
+                self.a._mark_trace("PACKAGE_FOUND")
+                return info
+            self.log.warning(f"[SHOP] 滑动 {first_pass + second_pass} 次仍未找到"
+                             f"商品 → PRODUCT_NOT_FOUND")
             return None
         finally:
             # 滑动结束(到底/异常/找到/超预算)统一释放状态锁(规格九)

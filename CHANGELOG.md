@@ -5,6 +5,33 @@
 
 ---
 
+## v1.2.8 — 弹窗识别非阻塞化 + 商城定数滑动(删回滚) (2026-08-21)
+
+规格 v4「主页识别后等 42 秒才点球」+「商城滚过头回滚逻辑错误」:
+
+1. **弹窗识别非阻塞化(42s 等待根因之一, 速度优化核心)**:
+   `PopupHandler._matches` 旧用 `find_element(timeout=1.5)` → u2
+   `el.wait()` 阻塞轮询, 无弹窗时每个 popup 配置睡满 1.5s。yaml 登记
+   3 个通用 popup, 每次 `handle_popups` 调用吃 4.5s; 主页→点球路径
+   (HANDLE_POPUPS 态 + execute_task 开头) 多次调用 → 累积十几秒,
+   叠加 `_handle_unknown_popup` 入口 sleep(1.5) → 接近 42s。
+   改 `d.exists(text=..., timeout=0)` 瞬时判断(一次 dump + 内存匹配,
+   不阻塞)。无弹窗时 handle_popups 从 4.5s 降到 <0.3s。
+2. **`_handle_unknown_popup` 二次确认 1.5s→0.3s**: 转场动画通常 <0.5s,
+   旧 sleep(1.5) 过长。改 0.3s + bust_caches 读最新画面, 仍 UNKNOWN
+   才走关闭策略。
+3. **商城滑动删回滚, 改定数 6+3(规格§四~§八)**:
+   旧三阶段(滑底 + 底部4屏搜索 + 反向回滚4屏)含"滚过头回滚"逻辑 —
+   规格判定该逻辑错误(目标是滑到底再识别, 不是精确定位)。重写为
+   两阶段定数滑动: 第一阶段 6 次 → 识别 → 未中补 3 次 → 再识别。
+   删除所有 rollback/reverse swipe。判底(连续2帧静帧无变化)保留为
+   到底提前停优化。滑动参数 duration 0.7s + 间隔 0.4s(规格§七)。
+   新增 `_scroll_pass` 辅助 + yaml `scroll_first_pass/scroll_second_pass`。
+4. **测试更新**: 替换 2 条 v1.2.5 单步确认机制测试为定数滑动契约
+   (不回滚无 down swipe / 钉底快速判底); test_3 契约 <=6→<=9(允许补滑)。
+
+- **测试**: 全量 363 条通过。
+
 ## v1.2.7 — GUI 实时日志不显示根因 + 弹窗即关 + 点球重试 (2026-08-21)
 
 三块独立修复(用户规格 v3):

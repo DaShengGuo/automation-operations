@@ -42,8 +42,10 @@ budgets:
   menu_open: 15            # 打开主菜单
   shop_entry: 15           # 点击商城 → 商城页出现
   shop_scroll: 10          # 商城快速滑底阶段(人工进店+滑底~3s; 判底靠连续两次截图无变化)
-  shop_find: 40            # 商城找商品总预算(滑底+4屏搜索+回滚)
+  shop_find: 40            # 商城找商品总预算(两阶段定数滑动)
   shop_reenter: 2          # 商城异常退出(首页UI出现)重进上限
+  scroll_first_pass: 6     # 第一阶段定数滑动次数(规格§五)
+  scroll_second_pass: 3    # 第二阶段补滑次数(规格§六)
   purchase_page: 20        # 点击商品 → Google Play 购买页出现
 
 # 注册选择页(RETURNING_PLAYER/REGISTER_SELECT)恢复参数 — §10/§15

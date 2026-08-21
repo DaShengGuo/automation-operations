@@ -194,8 +194,9 @@ def test_find_product_bottom_reached_stops(env):
     assert info is None                    # 脚本里没有商品
     assert ctrl.up_swipes < 12, \
         f"必须动态判底停止(实际 {ctrl.up_swipes} 次上滑)"
-    assert ctrl.up_swipes <= 6, \
-        f"到底后不得继续上滑(实际 {ctrl.up_swipes} 次)"
+    # 规格(2026-08-21 §六): 到底后若未识别商品, 允许补滑 3 次(6+3 上限 9)
+    assert ctrl.up_swipes <= 9, \
+        f"两阶段定数滑动 6+3 上限(实际 {ctrl.up_swipes} 次上滑)"
 
 
 # ── 测试 4: 登出守卫(未购买禁止登出) ────────────────────────────

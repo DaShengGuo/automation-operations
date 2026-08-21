@@ -370,7 +370,11 @@ class PokemonGoAdapter(BaseGameAutomation):
             return False  # 冷却中 — 等待循环每 2s 调用一次, 避免动作轰炸
         if self.detector.detect() != PokemonGoState.UNKNOWN:
             return False
-        time.sleep(1.5)
+        # 二次确认过滤转场瞬时 UNKNOWN(2026-08-21 速度优化): 旧 sleep(1.5)
+        # 太长 — 转场动画通常 <0.5s。改 0.3s + bust_caches 读最新画面,
+        # 仍稳定则真 UNKNOWN(走关闭策略)。
+        time.sleep(0.3)
+        self.detector.bust_caches()
         if self.detector.detect() != PokemonGoState.UNKNOWN:
             return False
         try:

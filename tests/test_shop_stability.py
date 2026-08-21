@@ -238,38 +238,38 @@ def test_shop_not_misdetected_as_main_menu(env, monkeypatch):
 
 # ── 4e: 滑动无变化时重试一次再判底(规格核心 — 防滑动未生效卡死) ──────
 
-def test_scroll_retry_on_no_change_then_bottom(env, monkeypatch):
-    """滑动后页面无变化 → 必须重试一次滑动再判, 仍无变化才算到底。
+def test_scroll_fixed_count_no_rollback(env, monkeypatch):
+    """定数滑动 6+3 次, 到底提前停, 绝不回滚(无 down swipe)。
 
-    规格(2026-08-21): 滑动后等0.8s检测页面是否变化。无变化时不要卡死,
-    执行再次尝试一次滑动。重试仍无变化才确认到底。
-    防止「触摸事件未完成/滑动未生效」被误判为到底导致脚本卡住。
+    规格(2026-08-21 §四~§八): 删除"滚过头回滚/反向查找"。
+    两阶段: 第一阶段 6 次 → 识别 → 未中补 3 次 → 再识别。
+    判底(连续 2 帧静帧无变化)是到底提前停, 不是回滚。
     """
     ctrl, adapter = env
     ctrl.scene = "SHOP"
-    # 滑动 4 次后页面钉底(截图不再变化) — 模拟到底
-    swipe_calls = {"n": 0}
-    orig_swipe = ctrl.swipe
+    swipe_calls = {"n": 0, "down": 0}
 
     def counted_swipe(x1, y1, x2, y2, duration=0.3):
         swipe_calls["n"] += 1
-        # 前 4 次上滑使 up_swipes 递增(截图种子变化, 页面变化)
-        # 之后 up_swipes 锁定, 截图种子不变(模拟到底)
         if y1 > y2:
-            ctrl.up_swipes += 1
+            ctrl.up_swipes += 1   # 上滑使页面变化(种子递增)
+        else:
+            swipe_calls["down"] += 1   # 回滚滑动(规格禁止)
     monkeypatch.setattr(ctrl, "swipe", counted_swipe)
 
     info = adapter.shop_auto.find_product(max_scroll=12)
-    assert info is None  # 无目标商品
-    # 必须发生重试滑动(无变化后的第二次 swipe) — 验证重试机制存在
-    # 12 次上限内到底: 4 次正常滑动 + 至少 1 次重试滑动
-    assert swipe_calls["n"] > 4, \
-        f"滑动无变化时必须重试一次(规格), 实际 swipe {swipe_calls['n']} 次"
+    assert info is None  # 脚本场景无目标商品
+    # 核心断言: 绝不回滚 — 不应有任何 down swipe 用于回滚查找
+    assert swipe_calls["down"] == 0, \
+        f"规格§四禁止回滚/反向滑动(实际 down swipe {swipe_calls['down']} 次)"
+    # 定数滑动: 第一阶段最多 6 次(到底提前停可能更少) + 第二阶段最多 3 次
+    assert swipe_calls["n"] <= 9, \
+        f"定数滑动 6+3 上限(实际 {swipe_calls['n']} 次)"
     assert adapter.shop_auto.scrolling is False, "退出后释放锁"
 
 
-def test_scroll_no_change_does_not_infinite_loop(env, monkeypatch):
-    """页面一开始就钉底(第一次滑动就无变化) → 重试一次后判底, 不无限滑。"""
+def test_scroll_bottom_stops_early_no_infinite(env, monkeypatch):
+    """页面钉底(滑动后静帧不变) → 连续 2 帧无变化提前判底, 不滑满 9 次。"""
     ctrl, adapter = env
     ctrl.scene = "SHOP"
     swipe_calls = {"n": 0}
@@ -281,9 +281,9 @@ def test_scroll_no_change_does_not_infinite_loop(env, monkeypatch):
 
     info = adapter.shop_auto.find_product(max_scroll=12)
     assert info is None
-    # 第一次滑动无变化 → 重试一次 → 仍无变化 → 判底 break
-    # 总滑动次数应很小(2次: 初次+重试), 不触达 max_scroll
-    assert swipe_calls["n"] <= 4, \
+    # 钉底: 第一阶段 i=1 即 stale=1, i=2 stale=2 判底 break(3 次 swipe)
+    # + 第二阶段 2 次判底 break = 5 次。远小于 9, 不无限滑。
+    assert swipe_calls["n"] <= 6, \
         f"页面钉底必须快速判底不无限滑(实际 {swipe_calls['n']} 次)"
 
 
