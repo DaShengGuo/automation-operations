@@ -19,12 +19,14 @@ version.py
   v1.3.3  滑动手势区防御+三段滑动日志+注册页检测提速
   v1.3.4  删MAP→HANDLE_POPUPS跳转+滑动起点避开X关闭按钮
   v1.3.5  砍掉商城滑动期间退出判断错误分支(SHOP_SCROLLING严格锁定)
+  v1.3.6  启动状态机精简(登录入口页确认后直接登录, 删DETECT_PAGE/LOGIN中转)
+          + 商城滑动坐标动态比例(x=宽25%/起82%/终15%, duration 800-1200ms)
   v2.0.0  重大架构升级
 """
 
 APP_NAME = "宝可梦自动化购买脚本"
 APP_NAME_EN = "PokemonAutomation"
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 APP_VERSION_TAG = f"v{APP_VERSION}"
 APP_TITLE = "欢迎使用宝可梦自动化购买脚本"
 APP_PUBLISHER = "PokemonAutomation"

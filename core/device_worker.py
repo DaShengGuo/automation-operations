@@ -429,7 +429,17 @@ class DeviceWorker(threading.Thread):
 
         elif state == WorkerState.START_GAME:
             self.automation.launch()
-            self._enter_state(WorkerState.DETECT_PAGE)
+            # 2026-08-22 状态机精简: launch 已确认登录入口页
+            # (RETURNING_PLAYER) 时直接执行登录流程, 不再经
+            # DETECT_PAGE → LOGIN 两次中转(真机: 「启动完成, 当前=
+            # RETURNING_PLAYER」之后仍空转 DETECT_PAGE 30s + LOGIN 90s
+            # 两个状态)。登录内部自带完整步级预算, 不需要状态超时钳制。
+            # HOME(残留会话归属检查)/弹窗/未知页仍走 DETECT_PAGE 安全路由。
+            if self._page() == PageState.LOGIN:
+                self.log.info("[REGISTER] 检测到登录入口页 — 进入登录流程")
+                self._run_login_flow()
+            else:
+                self._enter_state(WorkerState.DETECT_PAGE)
 
         elif state == WorkerState.DETECT_PAGE:
             page = self._page()
@@ -476,39 +486,7 @@ class DeviceWorker(threading.Thread):
                 time.sleep(0.5)  # SPLASH 等加载(高频复检, 出现即继续)
 
         elif state == WorkerState.LOGIN:
-            result = self.automation.login(self.account)
-            if result.value in ("SUCCESS", "ALREADY_LOGGED_IN"):
-                self.log.info(f"登录成功({result.value})")
-                self._login_done = True
-                self._enter_state(WorkerState.WAIT_HOME)
-            elif result.value in ("WRONG_PASSWORD", "ACCOUNT_ERROR"):
-                error = f"登录失败: {result.value}"
-                self._capture_evidence("LOGIN_FAILED", error)
-                self.accounts.mark_failed(self.account.id, self.serial, error)
-                self._finish_result(TaskRunState.FAILED, "LOGIN", error)
-                self.runtime.fail_count += 1
-                self._next_account()
-            else:
-                self._login_retries_left -= 1
-                if self._login_retries_left > 0:
-                    self.log.warning(f"登录结果 {result.value}，"
-                                     f"剩余重试 {self._login_retries_left}")
-                    if result.value == "TIMEOUT":
-                        # 认证超时时浏览器可能仍开在 PTC 页、游戏在后台 —
-                        # 先暖拉回游戏(不 force-stop, 省 60-100s 冷启动),
-                        # 再重走 DETECT_PAGE→LOGIN; 浏览器会话已建立时
-                        # 重试通常 30-40s 即过。真机实测: 不拉回游戏时
-                        # DETECT_PAGE 只看到外部浏览器 → UNKNOWN 死循环
-                        self.log.info("[登录] 超时重试: 暖切回游戏, 不冷重启")
-                        if not self.automation.launch():
-                            self.log.warning("[登录] 暖切回游戏失败, 改用冷重启")
-                            self.automation.restart()
-                    else:
-                        self.automation.restart()
-                    self.fsm.force(WorkerState.DETECT_PAGE)
-                    self._enter_state(WorkerState.DETECT_PAGE)
-                else:
-                    self._mark_account_retry(f"登录失败: {result.value}")
+            self._run_login_flow()
 
         elif state == WorkerState.WAIT_HOME:
             if self.detector_wait_home():
@@ -638,6 +616,50 @@ class DeviceWorker(threading.Thread):
 
         elif state in (WorkerState.IDLE, WorkerState.STOPPED):
             time.sleep(1)
+
+    def _run_login_flow(self):
+        """执行登录流程(登录入口页已确认, 无需先经 DETECT_PAGE 状态)。
+
+        2026-08-22 状态机精简: 原「launch → DETECT_PAGE → LOGIN」两次
+        中转已从启动快乐路径删除 — START_GAME 检测到登录入口页
+        (RETURNING_PLAYER) 后直接调用本方法。登录内部自带完整步级
+        预算(注册页/中央站/网页表单/游戏返回), 不需要状态超时钳制。
+        LOGIN 状态保留: 仅重试 / HANDLE_POPUPS / WAIT_HOME 分流 /
+        RECOVERY 回检等恢复路径使用。
+        """
+        result = self.automation.login(self.account)
+        if result.value in ("SUCCESS", "ALREADY_LOGGED_IN"):
+            self.log.info(f"登录成功({result.value})")
+            self._login_done = True
+            self._enter_state(WorkerState.WAIT_HOME)
+        elif result.value in ("WRONG_PASSWORD", "ACCOUNT_ERROR"):
+            error = f"登录失败: {result.value}"
+            self._capture_evidence("LOGIN_FAILED", error)
+            self.accounts.mark_failed(self.account.id, self.serial, error)
+            self._finish_result(TaskRunState.FAILED, "LOGIN", error)
+            self.runtime.fail_count += 1
+            self._next_account()
+        else:
+            self._login_retries_left -= 1
+            if self._login_retries_left > 0:
+                self.log.warning(f"登录结果 {result.value}，"
+                                 f"剩余重试 {self._login_retries_left}")
+                if result.value == "TIMEOUT":
+                    # 认证超时时浏览器可能仍开在 PTC 页、游戏在后台 —
+                    # 先暖拉回游戏(不 force-stop, 省 60-100s 冷启动),
+                    # 再重走 DETECT_PAGE→LOGIN; 浏览器会话已建立时
+                    # 重试通常 30-40s 即过。真机实测: 不拉回游戏时
+                    # DETECT_PAGE 只看到外部浏览器 → UNKNOWN 死循环
+                    self.log.info("[登录] 超时重试: 暖切回游戏, 不冷重启")
+                    if not self.automation.launch():
+                        self.log.warning("[登录] 暖切回游戏失败, 改用冷重启")
+                        self.automation.restart()
+                else:
+                    self.automation.restart()
+                self.fsm.force(WorkerState.DETECT_PAGE)
+                self._enter_state(WorkerState.DETECT_PAGE)
+            else:
+                self._mark_account_retry(f"登录失败: {result.value}")
 
     def _reset_residual_session(self):
         """发现残留 HOME 会话(本周期尚未登录) → 登出后重新检测走 LOGIN。

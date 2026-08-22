@@ -2,9 +2,12 @@
 core/state_machine.py
 Worker 状态机 — 每台设备的账号执行流程
 
-INIT → CHECK_DEVICE → START_GAME → DETECT_PAGE → LOGIN → WAIT_HOME
-     → HANDLE_POPUPS → EXECUTE_TASK → VERIFY_TASK → LOGOUT → CLEANUP
-     → NEXT_ACCOUNT → (START_GAME | IDLE)
+INIT → CHECK_DEVICE → START_GAME → WAIT_HOME → EXECUTE_TASK
+     → VERIFY_TASK → LOGOUT → CLEANUP → NEXT_ACCOUNT → (START_GAME | IDLE)
+  2026-08-22 状态机精简: launch 确认登录入口页(RETURNING_PLAYER)后
+  START_GAME 内直接执行登录流程, 不再经 DETECT_PAGE → LOGIN 中转
+  (真机曾「启动完成, 当前=RETURNING_PLAYER」后仍空转 DETECT_PAGE 30s
+  + LOGIN 90s)。残留会话(HOME)/弹窗/未知页仍走 DETECT_PAGE 安全路由。
 任意状态超时/异常 → RECOVERY → 恢复成功回 DETECT_PAGE，失败按级别升级。
 """
 from __future__ import annotations
@@ -37,7 +40,12 @@ TRANSITIONS: dict[WorkerState, set[WorkerState]] = {
     WorkerState.INIT: {WorkerState.CHECK_DEVICE, WorkerState.STOPPED},
     WorkerState.CHECK_DEVICE: {WorkerState.START_GAME, WorkerState.RECOVERY,
                                WorkerState.STOPPED},
-    WorkerState.START_GAME: {WorkerState.DETECT_PAGE, WorkerState.RECOVERY},
+    # 2026-08-22 状态机精简: 登录入口页确认后 START_GAME 内直接执行
+    # 登录流程 → WAIT_HOME, 不中转 DETECT_PAGE/LOGIN(真机曾
+    # RETURNING_PLAYER 后空转 DETECT_PAGE 30s + LOGIN 90s)。
+    # 残留会话(HOME)/弹窗/未知页仍走 DETECT_PAGE。
+    WorkerState.START_GAME: {WorkerState.DETECT_PAGE, WorkerState.WAIT_HOME,
+                             WorkerState.RECOVERY},
     WorkerState.DETECT_PAGE: {WorkerState.LOGIN, WorkerState.WAIT_HOME,
                               WorkerState.HANDLE_POPUPS, WorkerState.RECOVERY,
                               WorkerState.IDLE},

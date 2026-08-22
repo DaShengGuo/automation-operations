@@ -18,6 +18,7 @@ tests/test_shop_stability.py
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -629,3 +630,83 @@ def test_click_product_twice_then_fails(env, monkeypatch):
         f"最多点击 2 次(实际 {len(clicks)} 次)"
     assert any("PURCHASE_PAGE_TIMEOUT" in p for p in ctrl._saved), \
         "二次失败必须截图留档"
+
+
+# ── 12: 滑动坐标动态比例(2026-08-22 方案) ──────────────────────
+
+def test_swipe_coords_dynamic_ratio_1080(env, monkeypatch, caplog):
+    """1080x2400 基准: x=270(宽25%) / 起点=1968(高82%) / 终点=360(高15%),
+    duration 800~1200ms — 并输出屏幕尺寸+滑动坐标调试日志。"""
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    swipes = []
+
+    def record(x1, y1, x2, y2, duration=0.3):
+        swipes.append((x1, y1, x2, y2, duration))
+    monkeypatch.setattr(ctrl, "swipe", record)
+
+    # 测试进程 root 默认 WARNING, 用 at_level 上下文强制捕获 INFO 日志
+    with caplog.at_level(logging.INFO):
+        assert adapter.shop_auto.find_product(max_scroll=12) is None
+    assert len(swipes) == 9, f"定数 6+3=9 次(实际 {len(swipes)} 次)"
+    for x1, y1, x2, y2, dur in swipes:
+        assert (x1, x2) == (270, 270), \
+            f"x=屏宽25%(1080→270), 实际 {x1},{x2}"
+        assert y1 == 1968, f"起点=屏高82%(2400→1968), 实际 {y1}"
+        assert y2 == 360, f"终点=屏高15%(2400→360), 实际 {y2}"
+        assert 0.8 <= dur <= 1.2, f"duration 800~1200ms(实际 {dur}s)"
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "[SHOP] 屏幕尺寸: 1080x2400" in joined, \
+        "必须输出屏幕尺寸调试日志"
+    assert "滑动坐标: (270,1968) → (270,360)" in joined, \
+        "必须输出滑动坐标调试日志"
+
+
+def test_swipe_coords_dynamic_ratio_720p(env, monkeypatch):
+    """720P 设备(720x1600): x=180, 起点=1312, 终点=240 — 比例动态换算,
+    绝不写死像素(多设备兼容契约)。"""
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    ctrl.screen_w, ctrl.screen_h = 720, 1600
+    swipes = []
+    monkeypatch.setattr(ctrl, "swipe",
+                        lambda x1, y1, x2, y2, duration=0.3:
+                        swipes.append((x1, y1, x2, y2, duration)))
+
+    assert adapter.shop_auto.find_product(max_scroll=12) is None
+    assert swipes and swipes[0][:4] == (180, 1312, 180, 240)
+
+
+def test_swipe_coords_via_mapper_1440p(env, monkeypatch):
+    """1440P 设备(1440x3200)坐标走 CoordinateMapper: x=360, 起点=2624,
+    终点=480 — 与 click_ratio 同体系(含 insets/clamp)。"""
+    from core.coordinate import CoordinateMapper, ScreenInsets
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    ctrl.screen_w, ctrl.screen_h = 1440, 3200
+    ctrl.mapper = CoordinateMapper(width=1440, height=3200,
+                                   insets=ScreenInsets())
+    swipes = []
+    monkeypatch.setattr(ctrl, "swipe",
+                        lambda x1, y1, x2, y2, duration=0.3:
+                        swipes.append((x1, y1, x2, y2, duration)))
+
+    assert adapter.shop_auto.find_product(max_scroll=12) is None
+    assert swipes and swipes[0][:4] == (360, 2624, 360, 480)
+
+
+def test_swipe_start_avoids_center_x_button(env, monkeypatch):
+    """横向偏移契约: 滑动起点必须避开底部中央 X 关闭按钮带
+    (真机实测 (514,2158)) — 起点落在按钮上触摸会被按钮消费。"""
+    ctrl, adapter = env
+    ctrl.scene = "SHOP"
+    swipes = []
+    monkeypatch.setattr(ctrl, "swipe",
+                        lambda x1, y1, x2, y2, duration=0.3:
+                        swipes.append((x1, y1, x2, y2, duration)))
+
+    adapter.shop_auto.find_product(max_scroll=12)
+    for x1, y1, _, _, _ in swipes:
+        # 起点不得落在中心列(450~630)底部按钮带(2100~2256)内
+        assert not (450 <= x1 <= 630 and y1 >= 2100), \
+            f"滑动起点落在底部中央 X 按钮带: ({x1},{y1})"

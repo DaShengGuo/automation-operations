@@ -105,15 +105,78 @@ class TestWorkerPipeline:
         assert rows[0]["duration_sec"] >= 0
         # 状态机按预期顺序走过关键状态
         sources = {s.value for s, _ in w.fsm.history}
-        for state in ("START_GAME", "LOGIN", "EXECUTE_TASK",
+        for state in ("START_GAME", "WAIT_HOME", "EXECUTE_TASK",
                       "LOGOUT", "CLEANUP"):
             assert state in sources
+        # 规格 2026-08-22 状态机精简: launch 确认登录入口页后
+        # START_GAME 内直接执行登录流程 — 快乐路径不得出现
+        # DETECT_PAGE/LOGIN 状态中转(真机曾 RETURNING_PLAYER 后
+        # 空转 DETECT_PAGE 30s + LOGIN 90s)
+        assert "DETECT_PAGE" not in sources and "LOGIN" not in sources, \
+            "快乐路径启动后直接登录, 不得经 DETECT_PAGE/LOGIN 状态中转"
         # 规格 2026-08-21 t9k4m: 主页成功后直接 EXECUTE_TASK —
         # 不经过 HANDLE_POPUPS(真机曾 49 秒等待)
         assert "HANDLE_POPUPS" not in sources, \
             "主页成功后不得经过 HANDLE_POPUPS 状态"
         # 下一账号预取: 队列空时 account 释放
         assert w.account is None
+
+    def test_start_game_login_page_runs_login_directly(self, tmp_cfg, repos):
+        """2026-08-22 状态机精简回归: launch 后检测到登录入口页
+        (RETURNING_PLAYER) → 直接执行 login(), 不出现 DETECT_PAGE/
+        LOGIN 状态中转(真机曾「启动完成, 当前=RETURNING_PLAYER」后
+        仍空转 DETECT_PAGE 30s + LOGIN 90s 两个状态)。"""
+        accounts, results = repos
+        accounts.add("user001", "p")
+        w, _ = make_worker("FAKE-DIRECT", tmp_cfg, accounts, results)
+        for _ in range(30):
+            w._tick()
+            if w.runtime.success_count >= 1:
+                break
+
+        states = {s.value for s, _ in w.fsm.history}
+        assert "DETECT_PAGE" not in states, \
+            "登录入口页已确认不得再经 DETECT_PAGE 状态"
+        assert "LOGIN" not in states, \
+            "快乐路径登录不得再经 LOGIN 状态中转"
+        assert any(c.startswith("login:") for c in w.automation.calls), \
+            "登录流程必须已执行(login 调用)"
+        assert accounts.get_by_account("user001").status == AccountStatus.SUCCESS
+
+    def test_start_game_home_still_routes_detect_page(self, tmp_cfg, repos):
+        """残留会话安全: launch 后已是 HOME 时仍走 DETECT_PAGE 做
+        残留会话归属检查(登出后重登录), 不得直接执行任务
+        (状态机精简只删登录入口页的中转, 不动归属安全路由)。"""
+        accounts, results = repos
+        accounts.add("user001", "p")
+
+        class ResidualAutomation(ScriptedAutomation):
+            def __init__(self, serial=""):
+                super().__init__(serial)
+                self.residual = True
+
+            def detect_page(self):
+                self.calls.append("detect_page")
+                if self.residual:
+                    return PageState.HOME  # 残留会话: 未登录就已在 HOME
+                return PageState.HOME if self.login_done else PageState.LOGIN
+
+            def logout(self, force=False):
+                self.calls.append("logout")
+                self.residual = False       # 登出后残留会话消失
+                return True
+
+        w, _ = make_worker("FAKE-HOME-ROUTE", tmp_cfg, accounts, results,
+                           automation_cls=ResidualAutomation)
+        for _ in range(30):
+            w._tick()
+            if accounts.get_by_account("user001").status == AccountStatus.SUCCESS:
+                break
+
+        states = {s.value for s, _ in w.fsm.history}
+        assert "DETECT_PAGE" in states, \
+            "残留 HOME 会话必须走 DETECT_PAGE 安全路由(归属检查)"
+        assert accounts.get_by_account("user001").status == AccountStatus.SUCCESS
 
     def test_multi_worker_concurrency_no_duplicate(self, tmp_cfg, repos):
         """3 Worker 并发领取 6 账号 — 每账号恰好执行一次(多设备压力测试

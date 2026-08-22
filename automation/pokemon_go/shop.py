@@ -15,6 +15,7 @@ automation/pokemon_go/shop.py
 from __future__ import annotations
 
 import logging
+import random
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -216,12 +217,14 @@ class ShopAutomation:
         for i in range(count):
             self.a.tick_heartbeat()   # 长循环内刷新心跳, 防调度器误判卡死
             self.log.info(f"[SHOP] 滑动 {i + 1}/{count}")
-            self._do_swipe(swipe_x, y1, y2, duration=1.0)
-            time.sleep(0.5)   # 触摸间隔(duration 1.0s 后让滚动停下), 不判底
+            # duration 800~1200ms 随机(2026-08-22 动态坐标方案: 避免固定节奏)
+            duration = round(random.uniform(0.8, 1.2), 2)
+            self._do_swipe(swipe_x, y1, y2, duration=duration)
+            time.sleep(0.5)   # 触摸间隔(滑动停下), 不判底
         return None
 
     def _do_swipe(self, x: int, y1: int, y2: int, duration: float = 1.0):
-        """执行一次精确坐标上滑(规格 2026-08-21 §十: duration ~1000ms)。
+        """执行一次精确坐标上滑(2026-08-22 动态坐标方案: duration 800~1200ms)。
 
         异常不再静默(旧 debug 吞掉导致「日志显示滑动执行但页面不动」
         无法取证): 失败时 warning 日志 + 截图留档, 供离线排查坐标/
@@ -243,7 +246,8 @@ class ShopAutomation:
           2) 未识别 → 第二阶段补滑 second_pass(默认 3) 次 → 再识别。
         删除旧"滚过头回滚/反向查找"逻辑 — 目标是滑到底再识别,
         不是精确定位(规格§四: 禁止 rollback / reverse swipe)。
-        滑动参数: duration 1.0s + 间隔 0.5s。
+        滑动参数: duration 0.8~1.2s 随机 + 间隔 0.5s(坐标比例动态:
+        x=宽25% / 起点=高82% / 终点=高15%, 适配 720P/1080P/1440P)。
 
         SHOP_SCROLLING 状态锁定(规格§三/§五/§六): 滑动期间禁止商品
         识别/退出判断/补滑/点击 — 只有滑动完成后才进入
@@ -259,29 +263,35 @@ class ShopAutomation:
         first_pass = int(self.shop_cfg.get("scroll_first_pass", 6))
         second_pass = int(self.shop_cfg.get("scroll_second_pass", 3))
         self.log.info(f"[SHOP] 开始大幅滑动 {first_pass} 次")
-        # 滑动参数(规格 2026-08-21 t9k4m §九~§十一): 起点必须避开商城
-        # 底部中央 X 关闭按钮(真机实测 (514,2158)) — 从中心 x=540 底部
-        # 开始的滑动按下即落在按钮上, 触摸被按钮消费: 列表不动, 甚至
-        # 误触关闭退出商城(「滑动无效」根因)。改为横向偏移区域:
-        #   x = 360(左三分之一, 远离中心按钮), y = 2100→300(按钮上方)。
+        # 滑动参数(2026-08-22 动态坐标方案): 比例动态计算, 适配
+        # 720P/1080P/1440P, 绝不写死像素。
+        #   x     = 屏宽 25%(1080 → 270): 左四分之一区域, 远离底部中央
+        #           X 关闭按钮(真机实测 (514,2158)) — 从中心底部开始的
+        #           滑动按下即落在按钮上, 触摸被按钮消费(「滑动无效」
+        #           根因)。
+        #   start = 屏高 82%(2400 → 1968): 底部商品区, X 按钮上方
+        #   end   = 屏高 15%(2400 → 360): 顶部附近
+        #   duration = 800~1200ms 随机(避免固定节奏)
         # 坐标走 CoordinateMapper(与 click_ratio 同体系, 含 insets/clamp),
         # 并避底部系统手势区。
         mapper = getattr(self.d, "mapper", None)
+        sw = max(1, int(getattr(self.d, "screen_w", 1080) or 1080))
+        sh = max(1, int(getattr(self.d, "screen_h", 2400) or 2400))
+        self.log.info(f"[SHOP] 屏幕尺寸: {sw}x{sh}")
         if mapper is not None:
-            swipe_x = mapper.map(360, 1050)[0]    # 横向偏移: 避开中心 X 按钮
-            swipe_y2 = mapper.map(360, 300)[1]    # 终点: 顶部附近
-            raw_y1 = mapper.map(360, 2100)[1]     # 起点: X 按钮(2158)上方
+            swipe_x = mapper.map_ratio(0.25, 0.5)[0]    # 横向 1/4: 避中心 X
+            raw_y1 = mapper.map_ratio(0.5, 0.82)[1]     # 起点: 屏高 82%
+            swipe_y2 = mapper.map_ratio(0.5, 0.15)[1]   # 终点: 屏高 15%
             bottom_margin = int(getattr(mapper.insets, "bottom", 0)) + 80
-            max_y1 = max(1, getattr(self.d, "screen_h", 2400) - bottom_margin)
+            max_y1 = max(1, sh - bottom_margin)
             swipe_y1 = min(raw_y1, max_y1)        # 同时避系统底部手势区
         else:
-            sw = max(1, getattr(self.d, "screen_w", 1080))
-            sh = max(1, getattr(self.d, "screen_h", 2400))
-            swipe_x = int(sw * 0.333)             # 360(基准 1080)
-            swipe_y1 = min(int(sh * 0.875), sh - 80)  # 2100(基准), 避底边
-            swipe_y2 = int(sh * 0.125)                 # 300(基准 2400)
+            # round 修正浮点截断(0.82*2400=1967.9999 → int 会得 1967)
+            swipe_x = int(round(sw * 0.25))                # 270(基准 1080)
+            swipe_y1 = min(int(round(sh * 0.82)), sh - 80)  # 1968(基准), 避底边
+            swipe_y2 = int(round(sh * 0.15))               # 360(基准 2400)
         self.log.info(f"[SHOP] 滑动坐标: ({swipe_x},{swipe_y1}) → "
-                      f"({swipe_x},{swipe_y2}) duration=1.0s")
+                      f"({swipe_x},{swipe_y2}) duration=0.8~1.2s")
         try:
             # ── 第一阶段: 完整大幅滑动 first_pass 次(SHOP_SCROLLING 锁定,
             # 期间禁止识别/退出判断/补滑 — 规格§三/§五) ──
